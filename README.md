@@ -51,7 +51,7 @@
 
 ```bash
 # 저장소 클론
-git clone https://github.com/seoan1024/korean-llm-v2.git
+git clone https://github.com/seoan1210/korean-llm-v2.git
 cd korean-llm-v2
 
 # 필수 패키지 설치
