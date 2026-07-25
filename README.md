@@ -5,7 +5,7 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
-> **RTX 5090에서 처음부터 학습하는 541M 파라미터 한국어 LLM**
+> **내 컴퓨터에서 처음부터 학습하는 541M 파라미터 한국어 LLM**
 >
 > 완전히 새로운 구현. 최신 기술만 담았다. 한국어 이해는 기본.
 
