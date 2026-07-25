@@ -645,7 +645,7 @@ if __name__ == "__main__":
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=10,
+        eval_interval=150,
         checkpoint_interval=100
     )
     main(config)
