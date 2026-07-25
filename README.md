@@ -158,7 +158,7 @@ config = TrainingConfig(
     accumulation_steps=16,     # 누적 스텝 변경
     max_steps=100000,          # 최대 스텝
     learning_rate=3e-5,        # 학습률
-    eval_interval=20,          # 평가 간격
+    eval_interval=150,          # 평가 간격
 )
 main(config)
 ```
@@ -174,8 +174,8 @@ korean-llm-v2/
 ├── README.md                    # 이 파일
 ├── QUICK_REFERENCE.md           # 빠른 참조 가이드
 └── checkpoints/
-    ├── korean_llm_00010.pth     # 10스텝 체크포인트
-    ├── korean_llm_00020.pth     # 20스텝 체크포인트
+    ├── korean_llm_00150.pth     # 150스텝 체크포인트
+    ├── korean_llm_00300.pth     # 300스텝 체크포인트
     └── ...
 ```
 
