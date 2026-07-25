@@ -324,7 +324,7 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 
 ## 👨‍💻 개발자
 
-**만든 사람**: 재기 넘치는 AI 개발자  
+**만든 사람**: seoan1210
 **시작 날짜**: 2026-07-25  
 **현재 상태**: 활발히 개발 중 🚀
 
@@ -332,9 +332,8 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 
 ## 💬 질문 & 피드백
 
-- 🐛 **버그 리포트**: [Issues](https://github.com/YOUR_USERNAME/korean-llm-v2/issues)
-- 💡 **제안**: [Discussions](https://github.com/YOUR_USERNAME/korean-llm-v2/discussions)
-- 📧 **이메일**: your.email@example.com
+- 🐛 **버그 리포트**: [Issues](https://github.com/seoan1210/korean-llm-v2/issues)
+- 💡 **제안**: [Discussions](https://github.com/seoan1210/korean-llm-v2/discussions)
 
 ---
 
