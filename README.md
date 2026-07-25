@@ -402,7 +402,6 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 ## 💬 질문 & 피드백
 
 - 🐛 **버그 리포트**: [Issues](https://github.com/seoan1210/korean-llm-v2/issues)
-- 💡 **제안**: [Discussions](https://github.com/seoan1210/korean-llm-v2/discussions)
 
 ---
 
