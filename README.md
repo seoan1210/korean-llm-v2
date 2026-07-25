@@ -1,5 +1,4 @@
-
-
+```markdown
 # 🇰🇷 Korean LLM v2 - 완전 독자적 한국어 언어모델
 
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -27,85 +26,91 @@
 
 <img width="2752" height="1536" alt="한국어_LLM_아키텍처_학습_분석" src="https://github.com/user-attachments/assets/16fd7b11-b14d-4412-bf2a-ee972e3ed6a0" />
 
-
-
 ### 모델 스펙
 
+
 ```
+
 🔧 모델 크기: 541M 파라미터
-   - Hidden Size: 1280
-   - Layers: 20
-   - Attention Heads: 10
-   - FFN Hidden: 3200
+
+* Hidden Size: 1280
+* Layers: 20
+* Attention Heads: 10
+* FFN Hidden: 3200 (dim * 2.5)
+* Max Sequence Length: 256 (학습 기준)
+* Vocab Size: 128,257 (Llama-3 Open Ko + [PAD] 토큰)
 
 📊 학습 데이터:
-   - maywell/korean_textbooks (한국 교과서)
-   - squarelike/OpenOrca-gugugo-ko (OpenOrca 한국어)
-   - beomi/KoAlpaca-v1.1a (KoAlpaca 한국어)
+
+* maywell/korean_textbooks (한국 교과서)
+* squarelike/OpenOrca-gugugo-ko (OpenOrca 한국어)
+* beomi/KoAlpaca-v1.1a (KoAlpaca 한국어)
 
 ⚙️ 필요 하드웨어:
-   - GPU: VRAM 12GB 이상
-   지원시리즈:
-   RTX 50 시리즈 (Blackwell)
 
-   RTX 5090 → 32GB
-   RTX 5080 → 16GB
-   RTX 5070 Ti → 16GB
-   RTX 5070 → 12GB
-   RTX 5060 Ti → 16GB (8GB 버전도 있음)
+* GPU: VRAM 12GB 이상
+지원시리즈:
+RTX 50 시리즈 (Blackwell)
 
-   RTX 40 시리즈 (Ada Lovelace)
+RTX 5090 → 32GB
+RTX 5080 → 16GB
+RTX 5070 Ti → 16GB
+RTX 5070 → 12GB
+RTX 5060 Ti → 16GB (8GB 버전도 있음)
 
-   RTX 4090 → 24GB
-   RTX 4080 Super → 16GB
-   RTX 4080 → 16GB
-   RTX 4070 Ti Super → 16GB
-   RTX 4070 Ti → 12GB
-   RTX 4070 Super → 12GB
-   RTX 4070 → 12GB
-   RTX 4060 Ti → 16GB (8GB 버전도 있음)
+RTX 40 시리즈 (Ada Lovelace)
 
-   RTX 30 시리즈 (Ampere)
+RTX 4090 → 24GB
+RTX 4080 Super → 16GB
+RTX 4080 → 16GB
+RTX 4070 Ti Super → 16GB
+RTX 4070 Ti → 12GB
+RTX 4070 Super → 12GB
+RTX 4070 → 12GB
+RTX 4060 Ti → 16GB (8GB 버전도 있음)
 
-   RTX 3090 Ti → 24GB
-   RTX 3090 → 24GB
-   RTX 3080 Ti → 12GB
-   RTX 3080 → 12GB (10GB 버전도 있음)
-   RTX 3060 → 12GB (8GB 버전도 있음)
+RTX 30 시리즈 (Ampere)
 
-   그 외 (구형 포함)
+RTX 3090 Ti → 24GB
+RTX 3090 → 24GB
+RTX 3080 Ti → 12GB
+RTX 3080 → 12GB (10GB 버전도 있음)
+RTX 3060 → 12GB (8GB 버전도 있음)
 
-   TITAN RTX → 24GB
+그 외 (구형 포함)
 
-   노트북 (Laptop / Mobile)
-   RTX 50 시리즈 노트북
+TITAN RTX → 24GB
 
-   RTX 5090 Laptop → 24GB
-   RTX 5080 Laptop → 16GB
-   RTX 5070 Ti Laptop → 12GB
-   RTX 5070 Laptop → 12GB (8GB 버전도 있음)
+노트북 (Laptop / Mobile)
+RTX 50 시리즈 노트북
 
-   RTX 40 시리즈 노트북
+RTX 5090 Laptop → 24GB
+RTX 5080 Laptop → 16GB
+RTX 5070 Ti Laptop → 12GB
+RTX 5070 Laptop → 12GB (8GB 버전도 있음)
 
-   RTX 4090 Laptop → 16GB
-   RTX 4080 Laptop → 12GB
+RTX 40 시리즈 노트북
 
-   RTX 30 시리즈 노트북
+RTX 4090 Laptop → 16GB
+RTX 4080 Laptop → 12GB
 
-   RTX 3080 Ti Laptop → 16GB
-   RTX 3080 Laptop → 16GB (일부 모델, 8GB 버전도 있음)
+RTX 30 시리즈 노트북
 
-   - 배치사이즈: 2 (유효: 64, 누적 32스텝)
-   - 학습 속도:  하드웨어 마다 다름
+RTX 3080 Ti Laptop → 16GB
+RTX 3080 Laptop → 16GB (일부 모델, 8GB 버전도 있음)
+
+* 배치사이즈: 2 (유효: 64, 누적 32스텝)
+* 학습 속도: 하드웨어 마다 다름
 
 ⚙️ 사용된 하드웨어:
-   - 하드웨어 스펙:
-      Ultra 9 275HX - 24c 24t
-      RTX5090 laptop GPU 24GB GDDR7 VRAM
-      RAM 64GB DDR5 6400Mhz
-   - 배치사이즈: 2 (유효: 64, 누적 32스텝)
-   - 학습 속도: 약 0.3초/스텝
-   
+
+* 하드웨어 스펙:
+Ultra 9 275HX - 24c 24t
+RTX 5090 laptop GPU 24GB GDDR7 VRAM
+RAM 64GB DDR5 6400Mhz
+* 배치사이즈: 2 (유효: 64, 누적 32스텝)
+* 학습 속도: 약 0.3초/스텝
+
 ```
 
 ---
@@ -116,37 +121,39 @@
 
 ```bash
 # 저장소 클론
-git clone https://github.com/seoan1210/korean-llm-v2.git
+git clone [https://github.com/seoan1210/korean-llm-v2.git](https://github.com/seoan1210/korean-llm-v2.git)
 cd korean-llm-v2
 
 # 필수 패키지 설치
 pip install torch transformers datasets
 
-# 추천 (빠른 다운로드)
-https://pytorch.org/
-사이트에서 맞는 torch 버전 다운로드
 ```
+
+> **참고**: PyTorch는 본인의 환경(CUDA 버전)에 맞춰 [공식 사이트](https://pytorch.org/)에서 설치하는 것을 권장합니다.
 
 ### 2️⃣ 테스트 실행 (5분)
 
 ```bash
 python test_korean_llm.py
+
 ```
 
 모든 컴포넌트가 제대로 작동하는지 확인합니다:
-- ✅ GPU 확인
-- ✅ 모델 생성
-- ✅ 데이터셋 로드
-- ✅ 포워드/역전파
-- ✅ 생성 테스트
+
+* ✅ GPU 확인
+* ✅ 모델 생성
+* ✅ 데이터셋 로드
+* ✅ 포워드/역전파
+* ✅ 생성 테스트
 
 ### 3️⃣ 학습 시작
 
 ```bash
 python korean_llm_advanced_v2.py
+
 ```
 
-기본 설정으로 학습이 시작됩니다. 체크포인트는 10스텝마다 자동 저장됩니다.
+기본 설정으로 학습이 시작됩니다. 체크포인트는 100스텝마다 `checkpoints/` 폴더에 자동 저장됩니다.
 
 ### 4️⃣ 커스텀 설정
 
@@ -158,9 +165,11 @@ config = TrainingConfig(
     accumulation_steps=16,     # 누적 스텝 변경
     max_steps=100000,          # 최대 스텝
     learning_rate=3e-5,        # 학습률
-    eval_interval=150,          # 평가 간격
+    eval_interval=100,         # 샘플 생성 평가 간격
+    checkpoint_interval=100    # 체크포인트 저장 간격
 )
 main(config)
+
 ```
 
 ---
@@ -169,60 +178,77 @@ main(config)
 
 ```
 korean-llm-v2/
-├── korean_llm_advanced_v2.py   # 메인 학습 코드 (1000줄)
-├── test_korean_llm.py           # 테스트 스위트 (8가지 검사)
-├── README.md                    # 이 파일
+├── korean_llm_advanced_v2.py   # 메인 학습 코드
+├── test_korean_llm.py          # 테스트 스위트 (8가지 검사)
+├── README.md                   # 메인 안내 문서
 ├── QUICK_REFERENCE.md           # 빠른 참조 가이드
 └── checkpoints/
-    ├── korean_llm_00150.pth     # 150스텝 체크포인트
-    ├── korean_llm_00300.pth     # 300스텝 체크포인트
+    ├── korean_llm_00100.pth     # 100스텝 체크포인트
+    ├── korean_llm_00200.pth     # 200스텝 체크포인트
     └── ...
+
 ```
 
 ---
 
 ## 🎯 사용 방법
 
-### 학습된 모델 로드
+### 학습된 모델 로드 및 추론
 
 ```python
 import torch
-from korean_llm_advanced_v2 import KoreanLLM
 from transformers import AutoTokenizer
+from korean_llm_advanced_v2 import KoreanLLM, generate
 
-# 모델과 토크나이저 로드
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 1. 토크나이저 로드 및 PAD 토큰 추가
+tokenizer = AutoTokenizer.from_pretrained(
+    "beomi/Llama-3-Open-Ko-8B",
+    clean_up_tokenization_spaces=False
+)
+if tokenizer.pad_token is None:
+    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+# 2. 동적 vocab_size 및 pad_token_id 설정하여 모델 생성
 model = KoreanLLM(
-    vocab_size=128256,
-    pad_token_id=2,
+    vocab_size=len(tokenizer),
+    pad_token_id=tokenizer.pad_token_id,
     dim=1280,
     n_layers=20,
-    n_heads=10
-)
-model.load_state_dict(torch.load('korean_llm_00150.pth'))
+    n_heads=10,
+    max_seq_len=256
+).to(device)
+
+# 3. 체크포인트 로드
+checkpoint = torch.load('checkpoints/korean_llm_00100.pth', map_location=device)
+model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
-tokenizer = AutoTokenizer.from_pretrained("beomi/Llama-3-Open-Ko-8B")
-
-# 생성
-from korean_llm_advanced_v2 import generate
+# 4. 텍스트 생성
 response = generate(
-    model, tokenizer,
+    model, 
+    tokenizer,
     prompt="한국의 수도는",
     max_tokens=100,
     temperature=0.7,
-    device=torch.device("cuda")
+    device=device
 )
 print(response)
+
 ```
 
-### 체크포인트 복구
+### 체크포인트부터 학습 재개
 
 ```python
-# 학습 재개하기
-checkpoint = torch.load('korean_llm_00150.pth')
-model.load_state_dict(checkpoint['model_state_dict'])
-optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+from korean_llm_advanced_v2 import main, TrainingConfig
+
+# resume_from 옵션으로 원하는 체크포인트를 지정하면 모듈 상태를 모두 복구하여 이어 학습합니다.
+config = TrainingConfig(
+    resume_from='checkpoints/korean_llm_00100.pth'
+)
+main(config)
+
 ```
 
 ---
@@ -247,12 +273,13 @@ Transformer 블록 × 20
 선형 분류기 (어휘 크기)
   ↓
 로짓 (다음 토큰 확률)
+
 ```
 
 ### 주요 최적화
 
 | 기법 | 효과 | 구현 |
-|------|------|------|
+| --- | --- | --- |
 | Gradient Checkpointing | 메모리 60% 절약 | 학습 시에만 적용 |
 | AMP (bfloat16) | 속도 2배, 메모리 50% | 자동 혼합 정밀도 |
 | KV-Cache | 생성 10배 빠름 | 추론 시 키-값 캐싱 |
@@ -264,11 +291,12 @@ Transformer 블록 × 20
 ```python
 # 최적화 기본값
 Learning Rate:      5e-5
-Optimizer:          AdamW
+Optimizer:          AdamW (fused 지원 시 사용)
 Scheduler:          Cosine Annealing with Warmup
 Warmup Steps:       200
-Total Steps:        50,000
+Total Steps:        5,000 (설정 변경 가능)
 Grad Clipping:      1.0
+
 ```
 
 ---
@@ -284,8 +312,9 @@ config = TrainingConfig(batch_size=1)
 # 옵션 2: 시퀀스 길이 줄이기
 config = TrainingConfig(max_seq_len=128)
 
-# 옵션 3: 모델 크기 줄이기
+# 옵션 3: 모델 크기 줄이기 (korean_llm_advanced_v2.py 내부 조정)
 dim=768, n_layers=12
+
 ```
 
 ### 생성이 반복적
@@ -296,6 +325,7 @@ response = generate(..., temperature=0.9)
 
 # Top-K 샘플링 조정
 response = generate(..., top_k=20)
+
 ```
 
 ### 데이터셋 다운로드 느림
@@ -304,7 +334,8 @@ response = generate(..., top_k=20)
 # Hugging Face 캐시 위치
 ~/.cache/huggingface/datasets/
 
-# 캐시 사용 (첫 다운로드 후 자동)
+# 첫 다운로드 완료 후 자동 캐싱 적용
+
 ```
 
 ---
@@ -315,11 +346,11 @@ response = generate(..., top_k=20)
 
 이런 것들을 환영합니다:
 
-- 🚀 성능 최적화 (더 빠른 학습)
-- 📊 평가 메트릭 (벤치마크)
-- 🗣️ 한국어 데이터셋 추가
-- 🐛 버그 리포트
-- 📝 문서 개선
+* 🚀 성능 최적화 (더 빠른 학습)
+* 📊 평가 메트릭 (벤치마크)
+* 🗣️ 한국어 데이터셋 추가
+* 🐛 버그 리포트
+* 📝 문서 개선
 
 ### 기여 방법
 
@@ -335,6 +366,7 @@ git commit -m 'Add amazing feature'
 git push origin feature/amazing-feature
 
 # 5. Pull Request 생성
+
 ```
 
 ---
@@ -343,39 +375,43 @@ git push origin feature/amazing-feature
 
 ### 논문
 
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Transformer
-- [RoFormer](https://arxiv.org/abs/2104.09864) - RoPE
-- [Flash Attention](https://arxiv.org/abs/2205.14135) - 효율적 Attention
-- [Efficient Transformers](https://arxiv.org/abs/2401.00288) - KV-Cache
+* [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Transformer
+* [RoFormer](https://arxiv.org/abs/2104.09864) - RoPE
+* [Flash Attention](https://arxiv.org/abs/2205.14135) - 효율적 Attention
+* [Efficient Transformers](https://arxiv.org/abs/2401.00288) - KV-Cache
 
 ### 데이터셋
 
-- [maywell/korean_textbooks](https://huggingface.co/datasets/maywell/korean_textbooks)
-- [squarelike/OpenOrca-gugugo-ko](https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko)
-- [beomi/KoAlpaca-v1.1a](https://huggingface.co/datasets/beomi/KoAlpaca-v1.1a)
+* [maywell/korean_textbooks](https://huggingface.co/datasets/maywell/korean_textbooks)
+* [squarelike/OpenOrca-gugugo-ko](https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko)
+* [beomi/KoAlpaca-v1.1a](https://huggingface.co/datasets/beomi/KoAlpaca-v1.1a)
 
 ---
 
 ## 📋 로드맵
 
 ### Phase 1 (현재) ✅
-- [x] 모델 아키텍처 구현
-- [x] 학습 엔진 완성
+
+* [x] 모델 아키텍처 구현
+* [x] 학습 엔진 완성
 
 ### Phase 2
-- [ ] 5000 스텝 학습
-- [ ] 한국어 벤치마크 평가
-- [ ] 모델 양자화
+
+* [ ] 5000 스텝 학습
+* [ ] 한국어 벤치마크 평가
+* [ ] 모델 양자화
 
 ### Phase 3
-- [ ] 모델 크기 증가 (1B+)
-- [ ] 분산학습 지원
-- [ ] Hugging Face 모델 허브 올리기
+
+* [ ] 모델 크기 증가 (1B+)
+* [ ] 분산학습 지원
+* [ ] Hugging Face 모델 허브 올리기
 
 ### Phase 4
-- [ ] LoRA 파인튜닝
-- [ ] 특정 도메인 적응
-- [ ] API 서빙
+
+* [ ] LoRA 파인튜닝
+* [ ] 특정 도메인 적응
+* [ ] API 서빙
 
 ---
 
@@ -383,7 +419,7 @@ git push origin feature/amazing-feature
 
 MIT License - 자유롭게 사용, 수정, 배포하세요.
 
-자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
+자세한 내용은 [LICENSE](https://www.google.com/search?q=LICENSE) 파일을 참고하세요.
 
 ---
 
@@ -391,7 +427,7 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 
 **만든 사람**: seoan1210
 
-**시작 날짜**: 2026-07-25  
+**시작 날짜**: 2026-07-25
 
 **현재 상태**: 활발히 개발 중 🚀
 
@@ -401,7 +437,7 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 
 ## 💬 질문 & 피드백
 
-- 🐛 **버그 리포트**: [Issues](https://github.com/seoan1210/korean-llm-v2/issues)
+* 🐛 **버그 리포트**: [Issues](https://github.com/seoan1210/korean-llm-v2/issues)
 
 ---
 
@@ -409,18 +445,14 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 
 감사합니다:
 
-- Hugging Face (데이터셋 & 토크나이저)
-- PyTorch 커뮤니티
-- 한국 AI 커뮤니티
+* Hugging Face (데이터셋 & 토크나이저)
+* PyTorch 커뮤니티
+* 한국 AI 커뮤니티
 
 ---
-
-<div align="center">
 
 **⭐ 이 프로젝트가 도움이 되었다면 스타를 눌러주세요! ⭐**
 
 Made with ❤️ and 🤖
 
-[위로 가기 ⬆️](#-korean-llm-v2---완전-독자적-한국어-언어모델)
-
-</div>
+[위로 가기 ⬆️](https://www.google.com/search?q=%23-korean-llm-v2---%EC%99%84%EC%A0%84-%EB%8F%85%EC%9E%90%EC%A0%81-%ED%95%9C%EA%B5%AD%EC%96%B4-%EC%96%B8%EC%96%B4%EB%AA%A8%EB%8D%B8)
