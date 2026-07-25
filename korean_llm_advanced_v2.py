@@ -619,7 +619,8 @@ def main(config: TrainingConfig = TrainingConfig()):
                         logger.info(f"  Q: {prompt}\n  A: {response}")
                     
                     # 체크포인트 저장
-                    checkpoint_path = f"korean_llm_{actual_step:05d}.pth"
+                    os.makedirs("checkpoints", exist_ok=True)
+                    checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
                     torch.save({
                         'step': actual_step,
                         'model_state_dict': model.state_dict(),
