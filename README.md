@@ -1,3 +1,4 @@
+
 # 🇰🇷 Korean LLM v2 - 완전 독자적 한국어 언어모델
 
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -22,6 +23,9 @@
 - ✅ **효율적 학습**: Gradient Checkpointing + AMP (bfloat16)로 메모리 절약
 - ✅ **빠른 추론**: KV-Cache로 10배 빠른 생성
 - ✅ **안정적 학습**: Cosine Annealing + Warmup으로 최적화된 학습 곡선
+
+<img width="2752" height="1536" alt="한국어_LLM_아키텍처_학습_가이드" src="https://github.com/user-attachments/assets/516cbe33-3166-4913-970a-90e26f4c92b6" />
+
 
 ### 모델 스펙
 
