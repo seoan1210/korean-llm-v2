@@ -37,10 +37,68 @@
    - squarelike/OpenOrca-gugugo-ko (OpenOrca 한국어)
    - beomi/KoAlpaca-v1.1a (KoAlpaca 한국어)
 
-⚙️ 하드웨어:
-   - GPU: RTX 5090 (24GB VRAM)
+⚙️ 필요 하드웨어:
+   - GPU: VRAM 12GB 이상
+   지원시리즈:
+   RTX 50 시리즈 (Blackwell)
+
+   RTX 5090 → 32GB
+   RTX 5080 → 16GB
+   RTX 5070 Ti → 16GB
+   RTX 5070 → 12GB
+   RTX 5060 Ti → 16GB (8GB 버전도 있음)
+
+   RTX 40 시리즈 (Ada Lovelace)
+
+   RTX 4090 → 24GB
+   RTX 4080 Super → 16GB
+   RTX 4080 → 16GB
+   RTX 4070 Ti Super → 16GB
+   RTX 4070 Ti → 12GB
+   RTX 4070 Super → 12GB
+   RTX 4070 → 12GB
+   RTX 4060 Ti → 16GB (8GB 버전도 있음)
+
+   RTX 30 시리즈 (Ampere)
+
+   RTX 3090 Ti → 24GB
+   RTX 3090 → 24GB
+   RTX 3080 Ti → 12GB
+   RTX 3080 → 12GB (10GB 버전도 있음)
+   RTX 3060 → 12GB (8GB 버전도 있음)
+
+   그 외 (구형 포함)
+
+   TITAN RTX → 24GB
+
+   노트북 (Laptop / Mobile)
+   RTX 50 시리즈 노트북
+
+   RTX 5090 Laptop → 24GB
+   RTX 5080 Laptop → 16GB
+   RTX 5070 Ti Laptop → 12GB
+   RTX 5070 Laptop → 12GB (8GB 버전도 있음)
+
+   RTX 40 시리즈 노트북
+
+   RTX 4090 Laptop → 16GB
+   RTX 4080 Laptop → 12GB
+
+   RTX 30 시리즈 노트북
+
+   RTX 3080 Ti Laptop → 16GB
+   RTX 3080 Laptop → 16GB (일부 모델, 8GB 버전도 있음)
+
+   - 배치사이즈: 2 (유효: 64, 누적 32스텝)
+   - 학습 속도:  하드웨어 마다 다름
+⚙️ 사용된 하드웨어:
+   - 하드웨어 스펙:
+      Ultra 9 275HX - 24c 24t
+      RTX5090 laptop GPU 24GB GDDR7 VRAM
+      RAM 64GB DDR5 6400Mhz
    - 배치사이즈: 2 (유효: 64, 누적 32스텝)
    - 학습 속도: 약 0.3초/스텝
+   
 ```
 
 ---
