@@ -390,9 +390,13 @@ MIT License - 자유롭게 사용, 수정, 배포하세요.
 ## 👨‍💻 개발자
 
 **만든 사람**: seoan1210
+
 **시작 날짜**: 2026-07-25  
+
 **현재 상태**: 활발히 개발 중 🚀
+
 **슬라이드쇼** : [Korean-LLM-V2_Deep_Dive.pptx](https://github.com/user-attachments/files/30369754/Korean-LLM-V2_Deep_Dive.pptx)
+
 ---
 
 ## 💬 질문 & 피드백
