@@ -746,7 +746,6 @@ def main(config: TrainingConfig = TrainingConfig()):
     
     except KeyboardInterrupt:
         logger.info("\n⚠️ Training interrupted by user")
-        # 현재 상태 저장
         actual_step = step // config.accumulation_steps
         checkpoint_path = f"checkpoints/korean_llm_interrupted_{actual_step:05d}.pth"
         save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
@@ -757,18 +756,14 @@ def main(config: TrainingConfig = TrainingConfig()):
     logger.info("🎉 Training completed!")
 
 if __name__ == "__main__":
-    # ============================================
-    # 가장 간단한 방법: 체크포인트 있으면 재개, 없으면 처음부터 시작
-    # ============================================
     config = TrainingConfig(
         batch_size=2,
         accumulation_steps=32,
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=150,
+        eval_interval=100,
         checkpoint_interval=100,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None
-        # 👈 최신 체크포인트 있으면 그것으로, 없으면 None (처음부터 시작)
     )
     main(config)
