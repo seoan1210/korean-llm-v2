@@ -466,15 +466,106 @@ def generate(
     return response
 
 # ==========================================
-# 4. 메인 학습 루프
+# 4. 체크포인트 저장/로드 함수
+# ==========================================
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    step: int,
+    checkpoint_path: str
+):
+    """체크포인트 저장"""
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    
+    checkpoint = {
+        'step': step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+    }
+    
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"✅ Checkpoint saved: {checkpoint_path}")
+
+def load_checkpoint(
+    checkpoint_path: str,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device
+) -> int:
+    """
+    체크포인트 로드
+    
+    Args:
+        checkpoint_path: 체크포인트 경로
+        model: 모델
+        optimizer: 옵티마이저
+        scheduler: 스케줄러
+        device: 디바이스
+    
+    Returns:
+        시작 스텝 번호
+    """
+    if not os.path.exists(checkpoint_path):
+        logger.error(f"Checkpoint not found: {checkpoint_path}")
+        return 0
+    
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        # 모델 로드
+        model.load_state_dict(checkpoint['model_state_dict'])
+        logger.info("✅ Model state loaded")
+        
+        # 옵티마이저 로드
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        logger.info("✅ Optimizer state loaded")
+        
+        # 스케줄러 로드
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        logger.info("✅ Scheduler state loaded")
+        
+        start_step = checkpoint['step']
+        logger.info(f"✅ Checkpoint loaded from step {start_step}")
+        
+        return start_step
+    
+    except Exception as e:
+        logger.error(f"Error loading checkpoint: {e}")
+        return 0
+
+def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
+    """최신 체크포인트 찾기"""
+    if not os.path.exists(checkpoint_dir):
+        return None
+    
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
+    
+    if not checkpoints:
+        return None
+    
+    # 스텝 번호로 정렬
+    checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    
+    latest = checkpoints[-1]
+    latest_path = os.path.join(checkpoint_dir, latest)
+    logger.info(f"Found latest checkpoint: {latest}")
+    
+    return latest_path
+
+# ==========================================
+# 5. 메인 학습 루프 (개선된 버전)
 # ==========================================
 
 @dataclass
 class TrainingConfig:
     """학습 설정"""
-    batch_size: int = 2  # RTX 5090에서 충분함
+    batch_size: int = 2
     max_steps: int = 50000
-    accumulation_steps: int = 32  # 유효 배치사이즈 = 2 * 32 = 64
+    accumulation_steps: int = 32
     learning_rate: float = 5e-5
     warmup_steps: int = 200
     checkpoint_interval: int = 100
@@ -483,16 +574,17 @@ class TrainingConfig:
     num_workers: int = 0
     use_bfloat16: bool = True
     seed: int = 42
+    resume_from_checkpoint: Optional[str] = None  # 체크포인트 경로 또는 'latest'
 
 def setup_distributed(rank: int = 0, world_size: int = 1):
-    """분산학습 설정 (향후 확장용)"""
+    """분산학습 설정"""
     random.seed(42 + rank)
     torch.manual_seed(42 + rank)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42 + rank)
 
 def main(config: TrainingConfig = TrainingConfig()):
-    """메인 학습 함수"""
+    """메인 학습 함수 (체크포인트 로드 기능 추가)"""
     setup_distributed()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -544,13 +636,41 @@ def main(config: TrainingConfig = TrainingConfig()):
     )
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     
+    # ============================================
+    # 체크포인트 로드
+    # ============================================
+    start_step = 0
+    
+    if config.resume_from_checkpoint:
+        checkpoint_path = config.resume_from_checkpoint
+        
+        # 'latest'면 최신 체크포인트 찾기
+        if checkpoint_path.lower() == 'latest':
+            checkpoint_path = find_latest_checkpoint()
+            if checkpoint_path is None:
+                logger.warning("No checkpoint found, starting from scratch")
+        
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            logger.info(f"🔄 Loading checkpoint from: {checkpoint_path}")
+            start_step = load_checkpoint(
+                checkpoint_path,
+                model,
+                optimizer,
+                scheduler,
+                device
+            )
+    
     # 학습 루프
-    logger.info("🚀 Starting training...")
+    logger.info(f"🚀 Starting training from step {start_step}...")
     model.train()
-    optimizer.zero_grad()
+    
+    if start_step > 0:
+        optimizer.zero_grad()
+    else:
+        optimizer.zero_grad()
     
     running_loss = 0.0
-    step = 0
+    step = start_step
     
     try:
         for batch_idx, batch in enumerate(loader):
@@ -619,26 +739,27 @@ def main(config: TrainingConfig = TrainingConfig()):
                         logger.info(f"  Q: {prompt}\n  A: {response}")
                     
                     # 체크포인트 저장
-                    os.makedirs("checkpoints", exist_ok=True)
                     checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
-                    torch.save({
-                        'step': actual_step,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'scheduler_state_dict': scheduler.state_dict(),
-                    }, checkpoint_path)
-                    logger.info(f"✅ Checkpoint saved: {checkpoint_path}")
+                    save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
             
             step += 1
     
     except KeyboardInterrupt:
         logger.info("\n⚠️ Training interrupted by user")
+        # 현재 상태 저장
+        actual_step = step // config.accumulation_steps
+        checkpoint_path = f"checkpoints/korean_llm_interrupted_{actual_step:05d}.pth"
+        save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+    
     except Exception as e:
         logger.error(f"Training error: {e}", exc_info=True)
     
     logger.info("🎉 Training completed!")
 
 if __name__ == "__main__":
+    # ============================================
+    # 가장 간단한 방법: 체크포인트 있으면 재개, 없으면 처음부터 시작
+    # ============================================
     config = TrainingConfig(
         batch_size=2,
         accumulation_steps=32,
@@ -646,6 +767,8 @@ if __name__ == "__main__":
         warmup_steps=200,
         learning_rate=5e-5,
         eval_interval=150,
-        checkpoint_interval=100
+        checkpoint_interval=100,
+        resume_from_checkpoint='latest' if find_latest_checkpoint() else None
+        # 👈 최신 체크포인트 있으면 그것으로, 없으면 None (처음부터 시작)
     )
     main(config)
