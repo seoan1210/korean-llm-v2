@@ -1,4 +1,4 @@
-# 🇰🇷 Korean LLM v3 - 완전 독자적 한국어 언어모델
+# 🇰🇷 Korean LLM v2 - 완전 독자적 한국어 언어모델
 
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue)
