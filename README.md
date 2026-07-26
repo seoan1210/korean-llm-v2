@@ -114,7 +114,7 @@ pip install torch transformers datasets
 ### 2️⃣ 테스트 실행 (5분)
 
 ```bash
-python test_korean_llm.py
+python test/test_korean_llm.py
 ```
 
 모든 컴포넌트가 제대로 작동하는지 확인합니다:
@@ -126,6 +126,12 @@ python test_korean_llm.py
 
 ### 3️⃣ 학습 시작 (가장 간단!)
 
+**방법 A: 원본 코드로 시작**
+```bash
+python korean_llm_advanced_v2.py
+```
+
+**방법 B: 자동 재개 기능과 함께 (v3 추천!)**
 ```bash
 python checkpoint_resume.py
 ```
@@ -161,17 +167,35 @@ main(config)
 ## 📁 파일 구조
 
 ```
-korean-llm-v3/
-├── checkpoint_resume.py         # ✨ NEW: 체크포인트 자동 재개 기능
-├── korean_llm_advanced_v2.py    # 메인 학습 코드 (1000줄)
-├── test_korean_llm.py           # 테스트 스위트 (8가지 검사)
-├── checkpoint_usage_guide.md    # ✨ NEW: 체크포인트 가이드
-├── README.md                    # 이 파일
-├── QUICK_REFERENCE.md           # 빠른 참조 가이드
-└── checkpoints/
+KOREAN-LLM-V2/
+├── 📂 test/
+│   └── test_korean_llm.py           # 테스트 스위트 (8가지 검사)
+│
+├── korean_llm_advanced_v2.py        # ✨ 메인 학습 코드 (1000줄)
+├── .gitattributes                   # Git LFS 설정
+├── LICENSE                          # MIT 라이센스
+├── README.md                        # 이 파일
+│
+└── 📂 checkpoints/                  # 자동 생성되는 폴더
     ├── korean_llm_00150.pth
     ├── korean_llm_00300.pth
-    └── korean_llm_interrupted_00234.pth  # ✨ Ctrl+C로 중단된 것
+    └── korean_llm_interrupted_00234.pth  # Ctrl+C로 중단된 것
+```
+
+### ✨ v3에서 추가되는 파일들
+
+```
+KOREAN-LLM-V2/
+├── checkpoint_resume.py             # ✨ NEW: 체크포인트 자동 재개 기능
+├── checkpoint_usage_guide.md        # ✨ NEW: 체크포인트 완벽 가이드
+├── QUICK_REFERENCE.md               # ✨ NEW: 빠른 참조 가이드
+├── korean_llm_advanced_v2.py        # 메인 학습 코드
+├── test/
+│   └── test_korean_llm.py           # 테스트 스위트
+├── .gitattributes
+├── LICENSE
+├── README.md
+└── checkpoints/
 ```
 
 ---
