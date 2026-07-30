@@ -435,6 +435,7 @@ class TransformerBlock(nn.Module):
 
 class KoreanLLM(nn.Module):
     """한국어 LLM 모델"""
+
     def __init__(
         self,
         vocab_size: int,
@@ -445,85 +446,225 @@ class KoreanLLM(nn.Module):
         max_seq_len: int = 1024
     ):
         super().__init__()
+
         self.vocab_size = vocab_size
         self.pad_token_id = pad_token_id
         self.dim = dim
         self.n_heads = n_heads
-        
-        self.embed = nn.Embedding(vocab_size, dim)
+
+        # Token embedding
+        self.embed = nn.Embedding(
+            vocab_size,
+            dim
+        )
+
+        # Transformer layers
         self.layers = nn.ModuleList([
-            TransformerBlock(dim, n_heads, int(dim * 2.5))
+            TransformerBlock(
+                dim,
+                n_heads,
+                int(dim * 2.5)
+            )
             for _ in range(n_layers)
         ])
+
         self.norm = RMSNorm(dim)
-        self.output = nn.Linear(dim, vocab_size, bias=False)
-        self.output.weight = self.embed.weight
-        
-        f_cos, f_sin = precompute_freqs_cis(dim // n_heads, max_seq_len * 2)
-        self.register_buffer("f_cos", f_cos)
-        self.register_buffer("f_sin", f_sin)
-        
+
+        # Output projection
+        self.output = nn.Linear(
+            dim,
+            vocab_size,
+            bias=False
+        )
+
+        # RoPE
+        f_cos, f_sin = precompute_freqs_cis(
+            dim // n_heads,
+            max_seq_len * 2
+        )
+
+        self.register_buffer(
+            "f_cos",
+            f_cos
+        )
+
+        self.register_buffer(
+            "f_sin",
+            f_sin
+        )
+
+        # 초기화
         self._init_weights()
-    
+
+        # 마지막에 weight tying
+        self.tie_weights()
+
+
+    def tie_weights(self):
+        """
+        Output embedding weight sharing
+        Llama/GPT 계열 방식
+        """
+        self.output.weight = self.embed.weight
+
+
     def _init_weights(self):
+        """
+        GPT/Llama 스타일 초기화
+        """
+
         for module in self.modules():
+
             if isinstance(module, nn.Linear):
-                nn.init.normal_(module.weight, std=0.02)
+
+                nn.init.normal_(
+                    module.weight,
+                    mean=0.0,
+                    std=0.02
+                )
+
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Embedding):
-                nn.init.normal_(module.weight, std=0.02)
-    
-    def _get_freqs(self, f: torch.Tensor, start: int, length: int) -> torch.Tensor:
-        return f[start:start + length].unsqueeze(0).unsqueeze(0)
-    
-    def forward(
-            self,
-            tokens: torch.Tensor,
-            labels: Optional[torch.Tensor] = None,
-            kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
-        ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[Tuple[torch.Tensor, torch.Tensor]]]:
-            b, s = tokens.shape
-            x = self.embed(tokens)
-        
-            start_pos = 0
-            if kv_caches is not None and len(kv_caches) > 0 and kv_caches[0][0] is not None:
-                start_pos = kv_caches[0][0].shape[2]
-        
-            f_cos = self._get_freqs(self.f_cos, start_pos, s)
-            f_sin = self._get_freqs(self.f_sin, start_pos, s)
-        
-            new_kv_caches = []
-            for i, layer in enumerate(self.layers):
-                if self.training:
-                    def custom_forward(x):
-                        out, _ = layer(x, f_cos, f_sin, None)
-                        return out
 
-                    x = checkpoint(
-                        custom_forward,
-                        x,
-                        use_reentrant=False
-                    )
-                    kv = None
-                else:
-                    kv_cache = kv_caches[i] if kv_caches else None
-                    x, kv = layer(x, f_cos, f_sin, kv_cache=kv_cache)
-            
-                new_kv_caches.append(kv)
-        
-            x = self.norm(x)
-            logits = self.output(x)
-        
-            loss = None
-            if labels is not None:
-                loss = F.cross_entropy(
-                    logits[..., :-1, :].reshape(-1, logits.size(-1)),
-                    labels[..., 1:].reshape(-1),
-                    ignore_index=self.pad_token_id
+
+            elif isinstance(module, nn.Embedding):
+
+                nn.init.normal_(
+                    module.weight,
+                    mean=0.0,
+                    std=0.02
                 )
-        
-            return logits, loss, new_kv_caches
+
+
+    def _get_freqs(
+        self,
+        f: torch.Tensor,
+        start: int,
+        length: int
+    ):
+        return (
+            f[start:start + length]
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
+
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+        kv_caches: Optional[
+            List[Tuple[torch.Tensor, torch.Tensor]]
+        ] = None
+    ):
+
+        b, s = tokens.shape
+
+        # embedding
+        x = self.embed(tokens)
+
+
+        # KV cache 위치 계산
+        start_pos = 0
+
+        if (
+            kv_caches is not None
+            and len(kv_caches) > 0
+            and kv_caches[0] is not None
+            and kv_caches[0][0] is not None
+        ):
+            start_pos = kv_caches[0][0].shape[2]
+
+
+        # RoPE
+        f_cos = self._get_freqs(
+            self.f_cos,
+            start_pos,
+            s
+        )
+
+        f_sin = self._get_freqs(
+            self.f_sin,
+            start_pos,
+            s
+        )
+
+
+        new_kv_caches = []
+
+
+        for i, layer in enumerate(self.layers):
+
+            if self.training:
+
+                # gradient checkpoint
+                def custom_forward(hidden):
+                    output, _ = layer(
+                        hidden,
+                        f_cos,
+                        f_sin,
+                        None
+                    )
+                    return output
+
+
+                x = checkpoint(
+                    custom_forward,
+                    x,
+                    use_reentrant=False
+                )
+
+                kv = None
+
+
+            else:
+
+                cache = (
+                    kv_caches[i]
+                    if kv_caches is not None
+                    else None
+                )
+
+                x, kv = layer(
+                    x,
+                    f_cos,
+                    f_sin,
+                    kv_cache=cache
+                )
+
+
+            new_kv_caches.append(kv)
+
+
+
+        # final norm
+        x = self.norm(x)
+
+
+        # logits
+        logits = self.output(x)
+
+
+
+        loss = None
+
+        if labels is not None:
+
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+
+
+            loss = F.cross_entropy(
+                shift_logits.view(
+                    -1,
+                    self.vocab_size
+                ),
+                shift_labels.view(-1),
+                ignore_index=self.pad_token_id
+            )
+
+
+        return logits, loss, new_kv_caches
 
 # ==========================================
 # 3. 생성 함수
