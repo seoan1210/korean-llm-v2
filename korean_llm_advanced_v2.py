@@ -601,7 +601,7 @@ class TrainingConfig:
     learning_rate: float = 5e-5
     warmup_steps: int = 200
     checkpoint_interval: int = 100
-    eval_interval: int = 10
+    eval_interval: int = 500
     max_seq_len: int = 256
     num_workers: int = 4
     use_bfloat16: bool = True
@@ -734,16 +734,16 @@ def main(config: TrainingConfig = TrainingConfig()):
     optimizer.zero_grad()
     
     running_loss = 0.0
-    step = start_step
+    step = start_step * config.accumulation_steps
     
     try:
         epoch = 0
-        while step < config.max_steps:
+        while step // config.accumulation_steps < config.max_steps:
             epoch += 1
             logger.info(f"\n📍 Epoch {epoch}")
             
             for batch_idx, batch in enumerate(loader):
-                if step >= config.max_steps:
+                if step // config.accumulation_steps >= config.max_steps:
                     logger.info(f"Reached max steps ({config.max_steps}), stopping training")
                     break
                 
@@ -831,10 +831,10 @@ if __name__ == "__main__":
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=100,
+        eval_interval=500,
         checkpoint_interval=100,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
-        download_datasets=False,  # 처음 실행 시 True로 변경
-        samples_per_dataset=None   # 전체 데이터셋 사용
+        download_datasets=False, # 자동다운로드 (False에서는 다종 다운로드)
+        samples_per_dataset=10000
     )
     main(config)
