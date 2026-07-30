@@ -2,14 +2,17 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, IterableDataset
-from datasets import load_dataset
+from torch.utils.data import DataLoader, IterableDataset, Dataset
+from datasets import load_dataset, concatenate_datasets, DatasetDict
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from torch.utils.checkpoint import checkpoint
 import random
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 import logging
+import json
+from pathlib import Path
+import hashlib
 
 # ==========================================
 # 로깅 설정
@@ -18,7 +21,256 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# 1. 아키텍처 (개선된 버전)
+# 데이터셋 기본 설정
+# ==========================================
+
+DATASETS_DIR = Path("./datasets")
+DATASETS_CACHE_DIR = DATASETS_DIR / "cache"
+DATASETS_MANIFEST_FILE = DATASETS_DIR / "datasets_manifest.json"
+
+def ensure_datasets_dir():
+    """데이터셋 디렉토리 생성"""
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    DATASETS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ Datasets directory ready: {DATASETS_DIR.absolute()}")
+
+# ==========================================
+# 데이터셋 다운로드 및 관리
+# ==========================================
+
+class DatasetManager:
+    """로컬 데이터셋 관리 클래스"""
+    
+    DATASETS_CONFIG = [
+        {
+            "name": "maywell/korean_textbooks",
+            "config": "tiny-textbooks",
+            "split": "train",
+            "text_key": "text"
+        },
+        {
+            "name": "squarelike/OpenOrca-gugugo-ko",
+            "config": None,
+            "split": "train",
+            "text_key": "text"
+        },
+        {
+            "name": "beomi/KoAlpaca-v1.1a",
+            "config": None,
+            "split": "train",
+            "text_keys": ["instruction", "output"]  # 여러 필드 조합
+        }
+    ]
+    
+    def __init__(self, cache_dir: Path = DATASETS_CACHE_DIR):
+        self.cache_dir = cache_dir
+        self.manifest = self._load_manifest()
+        ensure_datasets_dir()
+    
+    def _load_manifest(self) -> Dict:
+        """매니페스트 파일 로드"""
+        if DATASETS_MANIFEST_FILE.exists():
+            with open(DATASETS_MANIFEST_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    
+    def _save_manifest(self):
+        """매니페스트 파일 저장"""
+        with open(DATASETS_MANIFEST_FILE, 'w') as f:
+            json.dump(self.manifest, f, indent=2)
+    
+    def _get_dataset_hash(self, config: Dict) -> str:
+        """데이터셋 config의 해시값 생성"""
+        config_str = json.dumps(config, sort_keys=True)
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
+    
+    def download_dataset(self, config: Dict, force: bool = False) -> Optional[str]:
+        """
+        데이터셋 다운로드 (처음 한 번만 실행)
+        
+        Args:
+            config: 데이터셋 설정
+            force: 기존 캐시 무시하고 다시 다운로드
+        
+        Returns:
+            로컬 캐시 경로 또는 None
+        """
+        dataset_hash = self._get_dataset_hash(config)
+        dataset_name = config['name']
+        
+        # 캐시 확인
+        if dataset_hash in self.manifest and not force:
+            cached_path = self.manifest[dataset_hash].get('path')
+            if cached_path and Path(cached_path).exists():
+                logger.info(f"✅ Using cached dataset: {dataset_name}")
+                return cached_path
+        
+        logger.info(f"📥 Downloading {dataset_name}...")
+        
+        try:
+            # 데이터셋 로드
+            if config["config"]:
+                ds = load_dataset(
+                    config["name"],
+                    config["config"],
+                    split=config["split"],
+                    cache_dir=str(self.cache_dir)
+                )
+            else:
+                ds = load_dataset(
+                    config["name"],
+                    split=config["split"],
+                    cache_dir=str(self.cache_dir)
+                )
+            
+            # 로컬 저장 (parquet 형식)
+            local_path = self.cache_dir / f"{dataset_hash}"
+            local_path.mkdir(exist_ok=True)
+            
+            ds.to_parquet(str(local_path / "data.parquet"))
+            
+            # 메타데이터 저장
+            self.manifest[dataset_hash] = {
+                'name': dataset_name,
+                'config': config,
+                'path': str(local_path),
+                'num_examples': len(ds)
+            }
+            self._save_manifest()
+            
+            logger.info(f"✅ Dataset saved: {local_path} ({len(ds)} examples)")
+            return str(local_path)
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to download {dataset_name}: {e}")
+            return None
+    
+    def get_or_download_all(self, force: bool = False) -> List[str]:
+        """모든 데이터셋 다운로드 또는 캐시 로드"""
+        paths = []
+        for config in self.DATASETS_CONFIG:
+            path = self.download_dataset(config, force=force)
+            if path:
+                paths.append(path)
+        
+        logger.info(f"✅ Ready with {len(paths)} datasets")
+        return paths
+
+# ==========================================
+# 로컬 데이터셋 클래스
+# ==========================================
+
+class LocalKoreanDataset(Dataset):
+    """로컬 파일에서 로드하는 한국어 데이터셋"""
+    
+    def __init__(
+        self,
+        dataset_paths: List[str],
+        tokenizer,
+        max_len: int = 256,
+        data_samples_per_dataset: Optional[int] = None
+    ):
+        """
+        Args:
+            dataset_paths: 로컬 데이터셋 경로 리스트
+            tokenizer: 토크나이저
+            max_len: 최대 시퀀스 길이
+            data_samples_per_dataset: 데이터셋당 사용할 샘플 수 (None이면 전체)
+        """
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        self.samples = []
+        
+        logger.info("📚 Loading local datasets...")
+        
+        # 모든 데이터셋에서 샘플 로드
+        for dataset_path in dataset_paths:
+            try:
+                from datasets import Dataset as HFDataset
+                
+                # parquet 파일 로드
+                parquet_file = Path(dataset_path) / "data.parquet"
+                if not parquet_file.exists():
+                    logger.warning(f"Parquet file not found: {parquet_file}")
+                    continue
+                
+                ds = HFDataset.from_parquet(str(parquet_file))
+                
+                # 샘플 수 제한
+                if data_samples_per_dataset:
+                    ds = ds.select(range(min(len(ds), data_samples_per_dataset)))
+                
+                # 텍스트 추출
+                texts = self._extract_texts(ds)
+                self.samples.extend(texts)
+                
+                logger.info(f"✅ Loaded {len(texts)} samples from {Path(dataset_path).name}")
+            
+            except Exception as e:
+                logger.error(f"❌ Error loading dataset from {dataset_path}: {e}")
+                continue
+        
+        logger.info(f"✅ Total samples loaded: {len(self.samples)}")
+    
+    def _extract_texts(self, ds) -> List[str]:
+        """데이터셋에서 텍스트 추출"""
+        texts = []
+        
+        for item in ds:
+            text = None
+            
+            # 다양한 필드명 시도
+            if "text" in item and item["text"]:
+                text = item["text"]
+            elif "instruction" in item and "output" in item:
+                text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
+            elif "question" in item and "answer" in item:
+                text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
+            elif "prompt" in item and "response" in item:
+                text = f"### 프롬프트: {item['prompt']}\n### 응답: {item['response']}"
+            
+            if text and len(text) > 5:
+                texts.append(text)
+        
+        return texts
+    
+    def __len__(self) -> int:
+        return len(self.samples)
+    
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """토크나이징된 텐서 반환"""
+        text = self.samples[idx]
+        
+        try:
+            # EOS 토큰 추가
+            text_with_eos = text + self.tokenizer.eos_token
+            
+            # 토크나이징
+            encoded = self.tokenizer.encode(
+                text_with_eos,
+                truncation=True,
+                max_length=self.max_len
+            )
+            
+            # 패딩
+            if len(encoded) < self.max_len:
+                encoded += [self.tokenizer.pad_token_id] * (self.max_len - len(encoded))
+            else:
+                encoded = encoded[:self.max_len]
+            
+            return torch.tensor(encoded, dtype=torch.long)
+        
+        except Exception as e:
+            logger.warning(f"Tokenization error: {e}")
+            # 폴백: 패딩된 토큰 반환
+            return torch.full((self.max_len,), self.tokenizer.pad_token_id, dtype=torch.long)
+
+def collate_fn(batch: List[torch.Tensor]) -> torch.Tensor:
+    """배치 콜레이션"""
+    return torch.stack(batch)
+
+# ==========================================
+# 1. 아키텍처 (개선된 버전 - 기존 코드 유지)
 # ==========================================
 
 class RMSNorm(nn.Module):
@@ -45,7 +297,7 @@ def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> t
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
 class SwiGLU(nn.Module):
-    """SwiGLU 활성화 함수: GLU 기반의 현대적 FFN"""
+    """SwiGLU 활성화 함수"""
     def __init__(self, dim: int, hidden_dim: int):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
@@ -56,10 +308,10 @@ class SwiGLU(nn.Module):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 class Attention(nn.Module):
-    """Multi-Head Attention with KV-Cache 지원"""
+    """Multi-Head Attention with KV-Cache"""
     def __init__(self, dim: int, n_heads: int):
         super().__init__()
-        assert dim % n_heads == 0, f"dim ({dim}) must be divisible by n_heads ({n_heads})"
+        assert dim % n_heads == 0
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
         
@@ -76,29 +328,15 @@ class Attention(nn.Module):
         kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Args:
-            x: (batch, seq_len, dim)
-            f_cos, f_sin: RoPE 주파수
-            kv_cache: 이전 KV 캐시 (k, v)
-            mask: 어텐션 마스크
-        
-        Returns:
-            output: (batch, seq_len, dim)
-            new_kv: (k, v) 새로운 캐시
-        """
         b, s, d = x.shape
         
-        # QKV 계산
         q = self.wq(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.wk(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.wv(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
         
-        # RoPE 적용
         q = apply_rotary_emb(q, f_cos, f_sin)
         k = apply_rotary_emb(k, f_cos, f_sin)
         
-        # KV-Cache 병합 (추론 시)
         if kv_cache is not None:
             pk, pv = kv_cache
             k = torch.cat([pk, k], dim=2)
@@ -106,19 +344,17 @@ class Attention(nn.Module):
         
         new_kv = (k.detach(), v.detach())
         
-        # Attention
         out = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=mask,
             is_causal=(mask is None and s > 1)
         )
         
-        # Output projection
         out = out.transpose(1, 2).contiguous().view(b, s, d)
         return self.wo(out), new_kv
 
 class TransformerBlock(nn.Module):
-    """Transformer 블록 (Attention + FFN)"""
+    """Transformer 블록"""
     def __init__(self, dim: int, n_heads: int, hidden_dim: int):
         super().__init__()
         self.attention = Attention(dim, n_heads)
@@ -133,14 +369,10 @@ class TransformerBlock(nn.Module):
         f_sin: torch.Tensor,
         kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # Self-Attention with Pre-Norm
         normed_x = self.attention_norm(x)
         h, new_kv = self.attention(normed_x, f_cos, f_sin, kv_cache=kv_cache)
         x = x + h
-        
-        # FFN with Pre-Norm
         x = x + self.feed_forward(self.ffn_norm(x))
-        
         return x, new_kv
 
 class KoreanLLM(nn.Module):
@@ -167,20 +399,15 @@ class KoreanLLM(nn.Module):
         ])
         self.norm = RMSNorm(dim)
         self.output = nn.Linear(dim, vocab_size, bias=False)
-        
-        # Weight tying (임베딩과 출력층 가중치 공유)
         self.output.weight = self.embed.weight
         
-        # RoPE 주파수 사전계산
         f_cos, f_sin = precompute_freqs_cis(dim // n_heads, max_seq_len * 2)
         self.register_buffer("f_cos", f_cos)
         self.register_buffer("f_sin", f_sin)
         
-        # 가중치 초기화
         self._init_weights()
     
     def _init_weights(self):
-        """xavier 초기화"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.normal_(module.weight, std=0.02)
@@ -190,7 +417,6 @@ class KoreanLLM(nn.Module):
                 nn.init.normal_(module.weight, std=0.02)
     
     def _get_freqs(self, f: torch.Tensor, start: int, length: int) -> torch.Tensor:
-        """시작 위치와 길이에 따른 주파수 추출"""
         return f[start:start + length].unsqueeze(0).unsqueeze(0)
     
     def forward(
@@ -199,52 +425,32 @@ class KoreanLLM(nn.Module):
         labels: Optional[torch.Tensor] = None,
         kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[Tuple[torch.Tensor, torch.Tensor]]]:
-        """
-        Args:
-            tokens: (batch, seq_len)
-            labels: (batch, seq_len) for training
-            kv_caches: 이전 KV 캐시 리스트
-        
-        Returns:
-            logits: (batch, seq_len, vocab_size)
-            loss: scalar or None
-            new_kv_caches: 새로운 KV 캐시 리스트
-        """
         b, s = tokens.shape
-        
-        # Embedding
         x = self.embed(tokens)
         
-        # KV-Cache 시작 위치 계산
         start_pos = 0
         if kv_caches is not None and len(kv_caches) > 0 and kv_caches[0][0] is not None:
             start_pos = kv_caches[0][0].shape[2]
         
-        # RoPE 주파수 추출
         f_cos = self._get_freqs(self.f_cos, start_pos, s)
         f_sin = self._get_freqs(self.f_sin, start_pos, s)
         
-        # Transformer 레이어 통과
         new_kv_caches = []
         for i, layer in enumerate(self.layers):
             if self.training:
-                # 훈련 시: gradient checkpointing 사용 (메모리 절약)
                 x, kv = checkpoint(
                     layer, x, f_cos, f_sin, None,
                     use_reentrant=False
                 )
             else:
-                # 추론 시: KV-Cache 사용
                 kv_cache = kv_caches[i] if kv_caches else None
                 x, kv = layer(x, f_cos, f_sin, kv_cache=kv_cache)
             
             new_kv_caches.append(kv)
         
-        # Output
         x = self.norm(x)
         logits = self.output(x)
         
-        # Loss 계산
         loss = None
         if labels is not None:
             loss = F.cross_entropy(
@@ -256,136 +462,7 @@ class KoreanLLM(nn.Module):
         return logits, loss, new_kv_caches
 
 # ==========================================
-# 2. 개선된 데이터셋
-# ==========================================
-
-class MultiKoreanDataset(IterableDataset):
-    """다중 한국어 데이터셋 (robust한 버전)"""
-    
-    def __init__(self, tokenizer, max_len: int = 256, samples_per_epoch: int = 10000):
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-        self.samples_per_epoch = samples_per_epoch
-        
-        # 데이터셋 메타데이터 (한 번만 로드)
-        self.datasets_config = [
-            {"name": "maywell/korean_textbooks", "config": "tiny-textbooks", "split": "train"},
-            {"name": "squarelike/OpenOrca-gugugo-ko", "config": None, "split": "train"},
-            {"name": "beomi/KoAlpaca-v1.1a", "config": None, "split": "train"}
-        ]
-        
-        logger.info(f"MultiKoreanDataset initialized with max_len={max_len}")
-    
-    def _load_dataset_iterator(self, config: dict):
-        """데이터셋 이터레이터 생성"""
-        try:
-            if config["config"]:
-                ds = load_dataset(
-                    config["name"],
-                    config["config"],
-                    split=config["split"],
-                    streaming=True
-                )
-            else:
-                ds = load_dataset(
-                    config["name"],
-                    split=config["split"],
-                    streaming=True
-                )
-            return iter(ds)
-        except Exception as e:
-            logger.warning(f"Failed to load {config['name']}: {e}")
-            return None
-    
-    def __iter__(self):
-        """무한 이터레이터 - 에포크 개념 없음"""
-        sample_count = 0
-        
-        while True:
-            # 매 에포크마다 새로운 이터레이터 생성
-            dataset_iters = []
-            for config in self.datasets_config:
-                it = self._load_dataset_iterator(config)
-                dataset_iters.append(it)
-            
-            # 유효한 이터레이터만 필터링
-            dataset_iters = [it for it in dataset_iters if it is not None]
-            
-            if not dataset_iters:
-                logger.error("No valid datasets available!")
-                break
-            
-            # 이 에포크에서 sample_per_epoch개 샘플 생성
-            epoch_samples = 0
-            while epoch_samples < self.samples_per_epoch:
-                # 랜덤하게 데이터셋 선택
-                dataset_iter = random.choice(dataset_iters)
-                
-                try:
-                    item = next(dataset_iter)
-                    text = self._extract_text(item)
-                    
-                    if not text or len(text) < 5:
-                        continue
-                    
-                    # 토크나이징
-                    encoded = self._tokenize(text)
-                    
-                    if encoded is not None:
-                        yield torch.tensor(encoded, dtype=torch.long)
-                        epoch_samples += 1
-                        sample_count += 1
-                        
-                        if sample_count % 1000 == 0:
-                            logger.info(f"Processed {sample_count} samples")
-                
-                except StopIteration:
-                    # 이 데이터셋이 끝났으면 새로 로드
-                    idx = dataset_iters.index(dataset_iter)
-                    new_iter = self._load_dataset_iterator(self.datasets_config[idx])
-                    if new_iter:
-                        dataset_iters[idx] = new_iter
-                    else:
-                        dataset_iters.remove(dataset_iter)
-                
-                except Exception as e:
-                    logger.warning(f"Error processing sample: {e}")
-                    continue
-    
-    def _extract_text(self, item: dict) -> str:
-        """아이템에서 텍스트 추출"""
-        if "text" in item and item["text"]:
-            return item["text"]
-        elif "instruction" in item and "output" in item:
-            return f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
-        elif "question" in item and "answer" in item:
-            return f"### 질문: {item['question']}\n### 답변: {item['answer']}"
-        return ""
-    
-    def _tokenize(self, text: str) -> Optional[List[int]]:
-        """텍스트 토크나이징"""
-        try:
-            # EOS 토큰 추가
-            text_with_eos = text + self.tokenizer.eos_token
-            
-            # 토크나이징
-            encoded = self.tokenizer.encode(
-                text_with_eos,
-                truncation=True,
-                max_length=self.max_len
-            )
-            
-            # 패딩 (고정 길이로 맞추기)
-            if len(encoded) < self.max_len:
-                encoded += [self.tokenizer.pad_token_id] * (self.max_len - len(encoded))
-            
-            return encoded
-        except Exception as e:
-            logger.warning(f"Tokenization error: {e}")
-            return None
-
-# ==========================================
-# 3. 생성 함수 (개선된 버전)
+# 3. 생성 함수
 # ==========================================
 
 @torch.no_grad()
@@ -398,27 +475,11 @@ def generate(
     top_k: int = 40,
     device: torch.device = None
 ) -> str:
-    """
-    개선된 생성 함수
-    
-    Args:
-        model: LLM 모델
-        tokenizer: 토크나이저
-        prompt: 프롬프트
-        max_tokens: 최대 생성 토큰 수
-        temperature: 온도 (낮을수록 결정론적)
-        top_k: Top-K 샘플링
-        device: 디바이스
-    
-    Returns:
-        생성된 텍스트
-    """
     if device is None:
         device = next(model.parameters()).device
     
     model.eval()
     
-    # 프롬프트 토크나이징
     prompt_text = f"### 지시: {prompt}\n### 응답:"
     tokens = tokenizer.encode(prompt_text, return_tensors="pt").to(device)
     
@@ -426,39 +487,29 @@ def generate(
     output_tokens = tokens
     
     for step in range(max_tokens):
-        # 마지막 토큰만 입력 (KV-Cache 활용)
         input_tokens = output_tokens[:, -1:] if kv_caches is not None else output_tokens
         
-        # 모델 추론
         with torch.no_grad():
             logits, _, kv_caches = model(input_tokens, kv_caches=kv_caches)
         
-        # 다음 토큰 샘플링
         next_logits = logits[:, -1, :] / temperature
         
-        # Top-K 필터링
         if top_k > 0:
             indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][..., -1, None]
             next_logits[indices_to_remove] = float('-inf')
         
-        # 소프트맥스
         probs = F.softmax(next_logits, dim=-1)
-        
-        # 샘플링
         next_token = torch.multinomial(probs, num_samples=1)
         
         output_tokens = torch.cat([output_tokens, next_token], dim=1)
         
-        # EOS 토큰이면 중단
         if next_token.item() == tokenizer.eos_token_id:
             break
         
-        # 최대 시퀀스 길이 체크 (메모리 누수 방지)
         if output_tokens.shape[1] > 512:
             logger.warning("Generated sequence too long, truncating")
             break
     
-    # 디코딩
     generated_text = tokenizer.decode(output_tokens[0], skip_special_tokens=True)
     response = generated_text.split("### 응답:")[-1].strip() if "### 응답:" in generated_text else generated_text
     
@@ -466,7 +517,7 @@ def generate(
     return response
 
 # ==========================================
-# 4. 체크포인트 저장/로드 함수
+# 4. 체크포인트 저장/로드
 # ==========================================
 
 def save_checkpoint(
@@ -476,7 +527,6 @@ def save_checkpoint(
     step: int,
     checkpoint_path: str
 ):
-    """체크포인트 저장"""
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     
     checkpoint = {
@@ -496,19 +546,6 @@ def load_checkpoint(
     scheduler,
     device: torch.device
 ) -> int:
-    """
-    체크포인트 로드
-    
-    Args:
-        checkpoint_path: 체크포인트 경로
-        model: 모델
-        optimizer: 옵티마이저
-        scheduler: 스케줄러
-        device: 디바이스
-    
-    Returns:
-        시작 스텝 번호
-    """
     if not os.path.exists(checkpoint_path):
         logger.error(f"Checkpoint not found: {checkpoint_path}")
         return 0
@@ -516,15 +553,12 @@ def load_checkpoint(
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device)
         
-        # 모델 로드
         model.load_state_dict(checkpoint['model_state_dict'])
         logger.info("✅ Model state loaded")
         
-        # 옵티마이저 로드
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         logger.info("✅ Optimizer state loaded")
         
-        # 스케줄러 로드
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         logger.info("✅ Scheduler state loaded")
         
@@ -538,7 +572,6 @@ def load_checkpoint(
         return 0
 
 def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
-    """최신 체크포인트 찾기"""
     if not os.path.exists(checkpoint_dir):
         return None
     
@@ -547,7 +580,6 @@ def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]
     if not checkpoints:
         return None
     
-    # 스텝 번호로 정렬
     checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
     
     latest = checkpoints[-1]
@@ -557,7 +589,7 @@ def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]
     return latest_path
 
 # ==========================================
-# 5. 메인 학습 루프 (개선된 버전)
+# 5. 메인 학습 루프
 # ==========================================
 
 @dataclass
@@ -571,10 +603,13 @@ class TrainingConfig:
     checkpoint_interval: int = 100
     eval_interval: int = 10
     max_seq_len: int = 256
-    num_workers: int = 0
+    num_workers: int = 4
     use_bfloat16: bool = True
     seed: int = 42
-    resume_from_checkpoint: Optional[str] = None  # 체크포인트 경로 또는 'latest'
+    resume_from_checkpoint: Optional[str] = None
+    # 새로운 옵션들
+    download_datasets: bool = False  # True면 데이터셋 다시 다운로드
+    samples_per_dataset: Optional[int] = None  # None이면 전체 사용
 
 def setup_distributed(rank: int = 0, world_size: int = 1):
     """분산학습 설정"""
@@ -584,13 +619,17 @@ def setup_distributed(rank: int = 0, world_size: int = 1):
         torch.cuda.manual_seed(42 + rank)
 
 def main(config: TrainingConfig = TrainingConfig()):
-    """메인 학습 함수 (체크포인트 로드 기능 추가)"""
+    """메인 학습 함수 (로컬 데이터셋 기반)"""
     setup_distributed()
+    ensure_datasets_dir()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    logger.info(f"📂 Datasets directory: {DATASETS_DIR.absolute()}")
     
-    # 토크나이저 로드
+    # ============================================
+    # 1. 토크나이저 로드
+    # ============================================
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         "beomi/Llama-3-Open-Ko-8B",
@@ -598,7 +637,44 @@ def main(config: TrainingConfig = TrainingConfig()):
     )
     tokenizer.pad_token = tokenizer.eos_token
     
-    # 모델 생성
+    # ============================================
+    # 2. 데이터셋 다운로드 및 로드
+    # ============================================
+    logger.info("Setting up datasets...")
+    manager = DatasetManager()
+    
+    # 데이터셋 다운로드 (또는 캐시 로드)
+    dataset_paths = manager.get_or_download_all(force=config.download_datasets)
+    
+    if not dataset_paths:
+        logger.error("❌ No datasets available!")
+        return
+    
+    # 로컬 데이터셋 생성
+    dataset = LocalKoreanDataset(
+        dataset_paths=dataset_paths,
+        tokenizer=tokenizer,
+        max_len=config.max_seq_len,
+        data_samples_per_dataset=config.samples_per_dataset
+    )
+    
+    if len(dataset) == 0:
+        logger.error("❌ Dataset is empty!")
+        return
+    
+    # 데이터로더
+    loader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        shuffle=True,
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    # ============================================
+    # 3. 모델 생성
+    # ============================================
     logger.info("Creating model...")
     model = KoreanLLM(
         vocab_size=len(tokenizer),
@@ -609,25 +685,13 @@ def main(config: TrainingConfig = TrainingConfig()):
         max_seq_len=config.max_seq_len
     ).to(device)
     
-    # 모델 크기 로그
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model: {total_params / 1e6:.1f}M total params, {trainable_params / 1e6:.1f}M trainable")
     
-    # 데이터로더
-    logger.info("Creating dataset...")
-    dataset = MultiKoreanDataset(
-        tokenizer,
-        max_len=config.max_seq_len,
-        samples_per_epoch=config.accumulation_steps * config.eval_interval * 10
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers
-    )
-    
-    # 옵티마이저와 스케줄러
+    # ============================================
+    # 4. 옵티마이저와 스케줄러
+    # ============================================
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -637,14 +701,13 @@ def main(config: TrainingConfig = TrainingConfig()):
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     
     # ============================================
-    # 체크포인트 로드
+    # 5. 체크포인트 로드
     # ============================================
     start_step = 0
     
     if config.resume_from_checkpoint:
         checkpoint_path = config.resume_from_checkpoint
         
-        # 'latest'면 최신 체크포인트 찾기
         if checkpoint_path.lower() == 'latest':
             checkpoint_path = find_latest_checkpoint()
             if checkpoint_path is None:
@@ -660,89 +723,95 @@ def main(config: TrainingConfig = TrainingConfig()):
                 device
             )
     
-    # 학습 루프
+    # ============================================
+    # 6. 학습 루프
+    # ============================================
     logger.info(f"🚀 Starting training from step {start_step}...")
-    model.train()
+    logger.info(f"📊 Dataset size: {len(dataset)} samples")
+    logger.info(f"📊 Total batches per epoch: {len(loader)}")
     
-    if start_step > 0:
-        optimizer.zero_grad()
-    else:
-        optimizer.zero_grad()
+    model.train()
+    optimizer.zero_grad()
     
     running_loss = 0.0
     step = start_step
     
     try:
-        for batch_idx, batch in enumerate(loader):
-            if step >= config.max_steps:
-                logger.info(f"Reached max steps ({config.max_steps}), stopping training")
-                break
+        epoch = 0
+        while step < config.max_steps:
+            epoch += 1
+            logger.info(f"\n📍 Epoch {epoch}")
             
-            batch = batch.to(device)
-            
-            # Forward pass with AMP
-            if device.type == 'cuda' and config.use_bfloat16:
-                with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                    _, loss, _ = model(batch, labels=batch)
-                    loss = loss / config.accumulation_steps
+            for batch_idx, batch in enumerate(loader):
+                if step >= config.max_steps:
+                    logger.info(f"Reached max steps ({config.max_steps}), stopping training")
+                    break
                 
-                scaler.scale(loss).backward()
-            else:
-                _, loss_val, _ = model(batch, labels=batch)
-                loss = loss_val / config.accumulation_steps
-                loss.backward()
-            
-            running_loss += loss.item() * config.accumulation_steps
-            
-            # Progress indicator
-            if step % 4 == 0:
-                print(".", end="", flush=True)
-            
-            # Gradient accumulation
-            if (step + 1) % config.accumulation_steps == 0:
+                batch = batch.to(device)
+                
+                # Forward pass with AMP
                 if device.type == 'cuda' and config.use_bfloat16:
-                    scaler.unscale_(optimizer)
-                
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                
-                if device.type == 'cuda' and config.use_bfloat16:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                
-                optimizer.zero_grad()
-                scheduler.step()
-                
-                # 로깅
-                actual_step = (step + 1) // config.accumulation_steps
-                avg_loss = running_loss / config.accumulation_steps
-                lr = scheduler.get_last_lr()[0]
-                
-                print(f"\n[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}")
-                
-                running_loss = 0.0
-                
-                # 평가 및 저장
-                if actual_step % config.eval_interval == 0:
-                    logger.info("\n📝 Generating samples...")
-                    prompts = [
-                        "한국의 수도는",
-                        "인공지능이란",
-                        "좋은 날씨에는"
-                    ]
-                    for prompt in prompts:
-                        response = generate(
-                            model, tokenizer, prompt=prompt,
-                            max_tokens=50, temperature=0.7, device=device
-                        )
-                        logger.info(f"  Q: {prompt}\n  A: {response}")
+                    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                        _, loss, _ = model(batch, labels=batch)
+                        loss = loss / config.accumulation_steps
                     
-                    # 체크포인트 저장
-                    checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
-                    save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
-            
-            step += 1
+                    scaler.scale(loss).backward()
+                else:
+                    _, loss_val, _ = model(batch, labels=batch)
+                    loss = loss_val / config.accumulation_steps
+                    loss.backward()
+                
+                running_loss += loss.item() * config.accumulation_steps
+                
+                # Progress indicator
+                if step % 4 == 0:
+                    print(".", end="", flush=True)
+                
+                # Gradient accumulation
+                if (step + 1) % config.accumulation_steps == 0:
+                    if device.type == 'cuda' and config.use_bfloat16:
+                        scaler.unscale_(optimizer)
+                    
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    
+                    if device.type == 'cuda' and config.use_bfloat16:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+                    
+                    optimizer.zero_grad()
+                    scheduler.step()
+                    
+                    # 로깅
+                    actual_step = (step + 1) // config.accumulation_steps
+                    avg_loss = running_loss / config.accumulation_steps
+                    lr = scheduler.get_last_lr()[0]
+                    
+                    print(f"\n[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}")
+                    
+                    running_loss = 0.0
+                    
+                    # 평가 및 저장
+                    if actual_step % config.eval_interval == 0:
+                        logger.info("\n📝 Generating samples...")
+                        prompts = [
+                            "한국의 수도는",
+                            "인공지능이란",
+                            "좋은 날씨에는"
+                        ]
+                        for prompt in prompts:
+                            response = generate(
+                                model, tokenizer, prompt=prompt,
+                                max_tokens=50, temperature=0.7, device=device
+                            )
+                            logger.info(f"  Q: {prompt}\n  A: {response}")
+                        
+                        # 체크포인트 저장
+                        checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
+                        save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+                
+                step += 1
     
     except KeyboardInterrupt:
         logger.info("\n⚠️ Training interrupted by user")
@@ -764,6 +833,8 @@ if __name__ == "__main__":
         learning_rate=5e-5,
         eval_interval=100,
         checkpoint_interval=100,
-        resume_from_checkpoint='latest' if find_latest_checkpoint() else None
+        resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
+        download_datasets=False,  # 처음 실행 시 True로 변경
+        samples_per_dataset=None   # 전체 데이터셋 사용
     )
     main(config)
