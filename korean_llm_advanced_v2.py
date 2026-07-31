@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset, Dataset
-from datasets import load_dataset, concatenate_datasets, DatasetDict
+from datasets import load_dataset, concatenate_datasets, DatasetDict, Dataset as HFDataset
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from torch.utils.checkpoint import checkpoint
 import random
@@ -13,10 +13,7 @@ import logging
 import json
 from pathlib import Path
 import hashlib
-import logging
-from pathlib import Path
-from typing import Dict, Optional
-import pandas as pd
+import time
 
 # ==========================================
 # 로깅 설정
@@ -90,7 +87,7 @@ class DatasetManager:
     
     def download_dataset(self, config: Dict, force: bool = False) -> Optional[str]:
         """
-        데이터셋 다운로드 (실패 시 3단계 재시도 전략)
+        데이터셋 다운로드 (실패 시 최대 3번 다른 방식으로 재시도)
         
         Args:
             config: 데이터셋 설정
@@ -101,9 +98,8 @@ class DatasetManager:
         """
         dataset_hash = self._get_dataset_hash(config)
         dataset_name = config['name']
-        local_path = self.cache_dir / f"{dataset_hash}"
         
-        # 1. 캐시 확인
+        # 캐시 확인
         if dataset_hash in self.manifest and not force:
             cached_path = self.manifest[dataset_hash].get('path')
             if cached_path and Path(cached_path).exists():
@@ -111,96 +107,73 @@ class DatasetManager:
                 return cached_path
         
         logger.info(f"📥 Downloading {dataset_name}...")
-        local_path.mkdir(parents=True, exist_ok=True)
-        ds = None
-
-        # --- [시도 1] 표준 load_dataset ---
-        try:
-            logger.info("👉 [Attempt 1] Standard load_dataset...")
-            kwargs = {"cache_dir": str(self.cache_dir)}
-            if config.get("config"):
-                kwargs["name"] = config["config"]
-            if config.get("split"):
-                kwargs["split"] = config["split"]
-
-            ds = load_dataset(dataset_name, **kwargs)
-
-        except Exception as e1:
-            logger.warning(f"⚠️ Attempt 1 failed for {dataset_name}: {e1}")
-
-        # --- [시도 2] Fallback 1: Parquet revision으로 로드 (Hugging Face 변환 본) ---
-        if ds is None:
+        
+        # 재시도 전략 정의 (최대 3회)
+        strategies = [
+            {"name": "standard", "streaming": False, "force_redownload": False},
+            {"name": "streaming", "streaming": True, "force_redownload": False},
+            {"name": "force_redownload", "streaming": False, "force_redownload": True},
+        ]
+        
+        last_error = None
+        
+        for attempt, strategy in enumerate(strategies, 1):
             try:
-                logger.info("👉 [Attempt 2] Retry with Parquet revision split...")
-                kwargs = {
+                logger.info(f"🔄 Attempt {attempt}/3 - Strategy: {strategy['name']}")
+                
+                load_kwargs = {
+                    "path": config["name"],
+                    "split": config["split"],
                     "cache_dir": str(self.cache_dir),
-                    "revision": "refs/convert/parquet"
                 }
-                if config.get("split"):
-                    kwargs["split"] = config["split"]
                 
-                ds = load_dataset(dataset_name, **kwargs)
-
-            except Exception as e2:
-                logger.warning(f"⚠️ Attempt 2 failed for {dataset_name}: {e2}")
-
-        # --- [시도 3] Fallback 2: 원본 JSON Direct Download (pandas 사용) ---
-        if ds is None and dataset_name == "squarelike/OpenOrca-gugugo-ko":
-            try:
-                logger.info("👉 [Attempt 3] Direct download raw JSON files...")
-                urls = [
-                    "https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko/resolve/main/ko-openorca_1M-GPT4-Augmented_split_0_to_2000_v6.json",
-                    "https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko/resolve/main/ko-openorca_3_5M-GPT3.5-Augmented_split_0_to_2000.json"
-                ]
+                if config.get("config"):
+                    load_kwargs["name"] = config["config"]
                 
-                dfs = []
-                for url in urls:
-                    logger.info(f"  Downloading file: {url.split('/')[-1]}")
-                    df = pd.read_json(url)
-                    dfs.append(df)
+                if strategy["streaming"]:
+                    load_kwargs["streaming"] = True
                 
-                full_df = pd.concat(dfs, ignore_index=True)
-                parquet_file = local_path / "data.parquet"
-                full_df.to_parquet(parquet_file)
+                if strategy["force_redownload"]:
+                    load_kwargs["download_mode"] = "force_redownload"
                 
-                num_examples = len(full_df)
+                # 데이터셋 로드
+                ds = load_dataset(**load_kwargs)
                 
-                # 메타데이터 저장 후 리턴
+                # 스트리밍인 경우 전체 데이터를 메모리로 가져오기
+                if strategy["streaming"]:
+                    logger.info("📥 Converting streaming dataset to regular dataset...")
+                    ds = HFDataset.from_list(list(ds))
+                
+                # 로컬 저장 (parquet 형식)
+                local_path = self.cache_dir / f"{dataset_hash}"
+                local_path.mkdir(exist_ok=True)
+                
+                ds.to_parquet(str(local_path / "data.parquet"))
+                
+                # 메타데이터 저장
                 self.manifest[dataset_hash] = {
                     'name': dataset_name,
                     'config': config,
                     'path': str(local_path),
-                    'num_examples': num_examples
+                    'num_examples': len(ds),
+                    'download_strategy': strategy['name']
                 }
                 self._save_manifest()
                 
-                logger.info(f"✅ Dataset saved (Direct Download): {local_path} ({num_examples} examples)")
+                logger.info(f"✅ Dataset saved: {local_path} ({len(ds)} examples) via {strategy['name']}")
                 return str(local_path)
-
-            except Exception as e3:
-                logger.error(f"❌ Attempt 3 failed for {dataset_name}: {e3}")
-
-        # --- 최종 저장 (시도 1 또는 2 성공 시) ---
-        if ds is not None:
-            try:
-                parquet_file = local_path / "data.parquet"
-                ds.to_parquet(str(parquet_file))
-                
-                num_examples = len(ds)
-                self.manifest[dataset_hash] = {
-                    'name': dataset_name,
-                    'config': config,
-                    'path': str(local_path),
-                    'num_examples': num_examples
-                }
-                self._save_manifest()
-                
-                logger.info(f"✅ Dataset saved: {local_path} ({num_examples} examples)")
-                return str(local_path)
+            
             except Exception as e:
-                logger.error(f"❌ Failed to write Parquet file: {e}")
-
-        logger.error(f"❌ All download attempts failed for {dataset_name}.")
+                last_error = e
+                logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']}): {e}")
+                
+                if attempt < 3:
+                    wait_time = attempt * 2  # 2초, 4초 대기
+                    logger.info(f"⏳ Waiting {wait_time} seconds before next attempt...")
+                    time.sleep(wait_time)
+        
+        # 모든 시도 실패
+        logger.error(f"❌ Failed to download {dataset_name} after 3 attempts. Last error: {last_error}")
         return None
     
     def get_or_download_all(self, force: bool = False) -> List[str]:
@@ -244,8 +217,6 @@ class LocalKoreanDataset(Dataset):
         # 모든 데이터셋에서 샘플 로드
         for dataset_path in dataset_paths:
             try:
-                from datasets import Dataset as HFDataset
-                
                 # parquet 파일 로드
                 parquet_file = Path(dataset_path) / "data.parquet"
                 if not parquet_file.exists():
@@ -435,7 +406,6 @@ class TransformerBlock(nn.Module):
 
 class KoreanLLM(nn.Module):
     """한국어 LLM 모델"""
-
     def __init__(
         self,
         vocab_size: int,
@@ -446,224 +416,78 @@ class KoreanLLM(nn.Module):
         max_seq_len: int = 1024
     ):
         super().__init__()
-
         self.vocab_size = vocab_size
         self.pad_token_id = pad_token_id
         self.dim = dim
         self.n_heads = n_heads
-
-        # Token embedding
-        self.embed = nn.Embedding(
-            vocab_size,
-            dim
-        )
-
-        # Transformer layers
+        
+        self.embed = nn.Embedding(vocab_size, dim)
         self.layers = nn.ModuleList([
-            TransformerBlock(
-                dim,
-                n_heads,
-                int(dim * 2.5)
-            )
+            TransformerBlock(dim, n_heads, int(dim * 2.5))
             for _ in range(n_layers)
         ])
-
         self.norm = RMSNorm(dim)
-
-        # Output projection
-        self.output = nn.Linear(
-            dim,
-            vocab_size,
-            bias=False
-        )
-
-        # RoPE
-        f_cos, f_sin = precompute_freqs_cis(
-            dim // n_heads,
-            max_seq_len * 2
-        )
-
-        self.register_buffer(
-            "f_cos",
-            f_cos
-        )
-
-        self.register_buffer(
-            "f_sin",
-            f_sin
-        )
-
-        # 초기화
-        self._init_weights()
-
-        # 마지막에 weight tying
-        self.tie_weights()
-
-
-    def tie_weights(self):
-        """
-        Output embedding weight sharing
-        Llama/GPT 계열 방식
-        """
+        self.output = nn.Linear(dim, vocab_size, bias=False)
         self.output.weight = self.embed.weight
-
-
+        
+        f_cos, f_sin = precompute_freqs_cis(dim // n_heads, max_seq_len * 2)
+        self.register_buffer("f_cos", f_cos)
+        self.register_buffer("f_sin", f_sin)
+        
+        self._init_weights()
+    
     def _init_weights(self):
-        """
-        GPT/Llama 스타일 초기화
-        """
-
         for module in self.modules():
-
             if isinstance(module, nn.Linear):
-
-                nn.init.normal_(
-                    module.weight,
-                    mean=0.0,
-                    std=0.02
-                )
-
+                nn.init.normal_(module.weight, std=0.02)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-
-
             elif isinstance(module, nn.Embedding):
-
-                nn.init.normal_(
-                    module.weight,
-                    mean=0.0,
-                    std=0.02
-                )
-
-
-    def _get_freqs(
-        self,
-        f: torch.Tensor,
-        start: int,
-        length: int
-    ):
-        return (
-            f[start:start + length]
-            .unsqueeze(0)
-            .unsqueeze(0)
-        )
-
-
+                nn.init.normal_(module.weight, std=0.02)
+    
+    def _get_freqs(self, f: torch.Tensor, start: int, length: int) -> torch.Tensor:
+        return f[start:start + length].unsqueeze(0).unsqueeze(0)
+    
     def forward(
         self,
         tokens: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
-        kv_caches: Optional[
-            List[Tuple[torch.Tensor, torch.Tensor]]
-        ] = None
-    ):
-
+        kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[Tuple[torch.Tensor, torch.Tensor]]]:
         b, s = tokens.shape
-
-        # embedding
         x = self.embed(tokens)
-
-
-        # KV cache 위치 계산
+        
         start_pos = 0
-
-        if (
-            kv_caches is not None
-            and len(kv_caches) > 0
-            and kv_caches[0] is not None
-            and kv_caches[0][0] is not None
-        ):
+        if kv_caches is not None and len(kv_caches) > 0 and kv_caches[0][0] is not None:
             start_pos = kv_caches[0][0].shape[2]
-
-
-        # RoPE
-        f_cos = self._get_freqs(
-            self.f_cos,
-            start_pos,
-            s
-        )
-
-        f_sin = self._get_freqs(
-            self.f_sin,
-            start_pos,
-            s
-        )
-
-
+        
+        f_cos = self._get_freqs(self.f_cos, start_pos, s)
+        f_sin = self._get_freqs(self.f_sin, start_pos, s)
+        
         new_kv_caches = []
-
-
         for i, layer in enumerate(self.layers):
-
             if self.training:
-
-                # gradient checkpoint
-                def custom_forward(hidden):
-                    output, _ = layer(
-                        hidden,
-                        f_cos,
-                        f_sin,
-                        None
-                    )
-                    return output
-
-
-                x = checkpoint(
-                    custom_forward,
-                    x,
+                x, kv = checkpoint(
+                    layer, x, f_cos, f_sin, None,
                     use_reentrant=False
                 )
-
-                kv = None
-
-
             else:
-
-                cache = (
-                    kv_caches[i]
-                    if kv_caches is not None
-                    else None
-                )
-
-                x, kv = layer(
-                    x,
-                    f_cos,
-                    f_sin,
-                    kv_cache=cache
-                )
-
-
+                kv_cache = kv_caches[i] if kv_caches else None
+                x, kv = layer(x, f_cos, f_sin, kv_cache=kv_cache)
+            
             new_kv_caches.append(kv)
-
-
-
-        # final norm
+        
         x = self.norm(x)
-
-
-        # logits
         logits = self.output(x)
-
-
-
+        
         loss = None
-
         if labels is not None:
-
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-
             loss = F.cross_entropy(
-                shift_logits.view(
-                    -1,
-                    self.vocab_size
-                ),
-                shift_labels.view(-1),
+                logits[..., :-1, :].reshape(-1, logits.size(-1)),
+                labels[..., 1:].reshape(-1),
                 ignore_index=self.pad_token_id
             )
-
-
+        
         return logits, loss, new_kv_caches
 
 # ==========================================
@@ -807,12 +631,13 @@ class TrainingConfig:
     warmup_steps: int = 200
     checkpoint_interval: int = 100
     eval_interval: int = 500
-    max_seq_len: int = 512
+    max_seq_len: int = 256
     num_workers: int = 4
     use_bfloat16: bool = True
     seed: int = 42
     resume_from_checkpoint: Optional[str] = None
-    download_datasets: bool = False  # 캐시 없으면 자동 다운로드, 있으면 재사용
+    # 새로운 옵션들
+    download_datasets: bool = False  # True면 데이터셋 다시 다운로드
     samples_per_dataset: Optional[int] = None  # None이면 전체 사용
 
 def setup_distributed(rank: int = 0, world_size: int = 1):
@@ -1000,8 +825,7 @@ def main(config: TrainingConfig = TrainingConfig()):
                     if actual_step % config.eval_interval == 0:
                         logger.info("\n📝 Generating samples...")
                         prompts = [
-                            "안녕",
-                            "파이썬이란",
+                            "한국의 수도는",
                             "인공지능이란",
                             "좋은 날씨에는"
                         ]
@@ -1036,9 +860,9 @@ if __name__ == "__main__":
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=500,
+        eval_interval=100,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
-        download_datasets=False, # 캐시 없으면 자동 다운로드, 있으면 재사용
+        download_datasets=False,  # True로 바꾸면 강제로 다시 다운로드
         samples_per_dataset=None
     )
     main(config)
