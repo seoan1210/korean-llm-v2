@@ -827,8 +827,11 @@ def main(config: TrainingConfig = TrainingConfig()):
                         prompts = [
                             "한국의 수도는",
                             "인공지능이란",
-                            "좋은 날씨에는"
-                        ]
+                            "다음 문장을 이어서 작성하세요: 오늘은 날씨가",
+                            "파이썬은",
+                            "대한민국은",
+                            "다음 질문에 답하세요. 물은 왜 끓나요?"
+                            ]
                         for prompt in prompts:
                             response = generate(
                                 model, tokenizer, prompt=prompt,
