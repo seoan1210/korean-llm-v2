@@ -1,694 +1,881 @@
-# 🇰🇷 Korean LLM V2
-
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=flat-square)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red?style=flat-square)
-![CUDA](https://img.shields.io/badge/CUDA-11.8%2B-76b900?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Active%20Training-brightgreen?style=flat-square)
-![Steps](https://img.shields.io/badge/Steps-9700%2F50000-orange?style=flat-square)
-![Loss](https://img.shields.io/badge/Loss-1.50%20±%200.08-yellow?style=flat-square)
-
-한국어 대규모 언어 모델을 **완전히 독자적으로** 개발하고 학습시키는 오픈소스 프로젝트입니다.
-
-LLaMA 기반의 1.3B 파라미터 모델을 순수 한국어 데이터로 학습하고 있습니다. 
-**모든 사람**이 자신의 GPU로 이 프로젝트를 사용할 수 있도록 설계되었습니다. 🎯
-
-**Current Status**: 🚀 10000 Steps | Loss: 1.45~1.70 (Stable) | Training Ongoing
-
----
-
-## ✨ 프로젝트 특징
-
-- 🎯 **완전 독자적 개발**: 모든 코드를 처음부터 직접 작성
-- 📚 **한국어 특화**: 3개의 공개 한국어 데이터셋으로 학습
-- ⚡ **유연한 설정**: 4GB ~ 80GB GPU 모두 지원
-- 📖 **완벽한 문서**: 초보자부터 전문가까지 모두 이용 가능
-- 🔐 **100% 오픈소스**: MIT 라이선스로 자유롭게 사용 가능
-- 🌍 **모든 플랫폼**: Windows, Linux, macOS 모두 지원
-
----
-
-## 🚀 빠른 시작 (5분)
-
-### 1️⃣ 필요한 것
-
-```bash
-# 최소 요구사항
-- Python 3.9+
-- GPU: 8GB VRAM (권장: 12GB+)
-- CUDA: 11.8+ 또는 12.1
-- 디스크: 5TB (데이터셋 + 모델)
-```
-
-### 2️⃣ 설치
-
-```bash
-# PyTorch 설치 (CUDA 11.8)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# 또는 CUDA 12.1
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# 의존성 설치
-pip install transformers datasets
-```
-
-### 3️⃣ 학습 시작
-
-```python
-from korean_llm_advanced_v2 import TrainingConfig, main
-
-config = TrainingConfig(
-    batch_size=2,
-    max_steps=50000,
-    learning_rate=5e-5,
-)
-
-main(config)
-```
-
----
-
-## 📊 GPU별 권장 설정
-
-### 24GB VRAM (RTX 5090, 4090, A100 등)
-```python
-config = TrainingConfig(
-    batch_size=2,
-    accumulation_steps=32,
-    max_seq_len=256,
-    use_bfloat16=True,
-)
-# 예상 속도: 3-5초/스텝
-```
-
-### 16GB VRAM (RTX 4080, 3090 등)
-```python
-config = TrainingConfig(
-    batch_size=1,
-    accumulation_steps=64,
-    max_seq_len=256,
-    use_bfloat16=True,
-)
-# 예상 속도: 5-8초/스텝
-```
-
-### 12GB VRAM (RTX 4070 등)
-```python
-config = TrainingConfig(
-    batch_size=1,
-    accumulation_steps=64,
-    max_seq_len=128,
-    use_bfloat16=True,
-)
-# 예상 속도: 8-12초/스텝
-```
-
-### 8GB VRAM (RTX 4060, 3060 등)
-```python
-config = TrainingConfig(
-    batch_size=1,
-    accumulation_steps=128,
-    max_seq_len=128,
-    use_bfloat16=True,
-)
-# 예상 속도: 15-20초/스텝
-```
-
-### 저사양 (4GB~6GB)
-```python
-config = TrainingConfig(
-    batch_size=1,
-    accumulation_steps=256,
-    max_seq_len=64,
-    use_bfloat16=True,
-)
-# 주의: 모델 크기 축소 필요
-# dim=512, n_layers=12 (기본값: 1280, 20)
-```
-
----
-
-## 🏗️ 프로젝트 구조
-
-```
-korean-llm-v2/
-├── korean_llm_advanced_v2.py  # 메인 학습 코드 (1,300 라인)
-├── README.md                   # 이 파일
-├── LICENSE                     # MIT 라이선스
-└── .gitattributes             # Git 속성 설정
-```
-
-### 파일 설명
-
-| 파일 | 설명 |
-|------|------|
-| **korean_llm_advanced_v2.py** | 전체 학습 파이프라인 (모델, 데이터, 학습 루프) |
-| **README.md** | 프로젝트 문서 및 사용 가이드 |
-| **LICENSE** | MIT 라이선스 전문 |
-
----
-
-## 📚 모델 아키텍처
-
-### KoreanLLM (1.3B 파라미터)
-
-```
-입력 (토큰 ID)
-    ↓
-Embedding Layer (vocab → 1280 dim)
-    ↓
-[Transformer Block × 20]
-  ├─ Multi-Head Attention (10 heads)
-  │  ├─ Query, Key, Value Projection
-  │  ├─ Rotary Position Embedding (RoPE)
-  │  └─ KV-Cache (추론 최적화)
-  ├─ Feed Forward (SwiGLU)
-  │  └─ 1280 → 3200 → 1280
-  ├─ RMSNorm
-  └─ Residual Connections
-    ↓
-Output Projection (1280 → vocab)
-    ↓
-확률 분포 (다음 토큰)
-```
-
-### 핵심 기술
-
-- **RoPE (Rotary Position Embedding)**: 위치 정보를 rotation으로 인코딩
-- **RMSNorm**: 안정적인 레이어 정규화
-- **SwiGLU**: 고성능 활성화 함수
-- **Gradient Checkpointing**: 메모리 효율화
-- **bfloat16 AMP**: 혼합 정밀도로 속도 향상
-- **KV-Cache**: 자기회귀 생성 최적화
-
----
-
-## 📊 학습 현황
-
-### 10100 스텝 기준 (5090 Laptop으로 학습시킨 결과)
-
-```
-평균 손실: 1.50 ± 0.08
-손실 범위: 1.45 ~ 1.70
-학습 상태: 수렴 중
-학습 속도: 4.5초/스텝 (RTX 5090 기준)
-처리량: 114 tokens/sec
-스텝당: 4.5초
-셈플:
-INFO:__main__:  Q: 한국의 수도는
-  A: 수도는 한국의 수도 중 하나입니다. 수도는 대리점으로 나누어져 있으며, 대리점으로 나누어져 있습니다. 수도는 대리점으로, 수도는 대리점이며, 수도는 대리점
-INFO:__main__:  Q: 인공지능이란
-  A: 인공지능은 기계가 인간처럼 생각하고 행동할 수 있는 능력을 갖는 기계를 말합니다. 인공지능은 기계 학습, 자연어 처리, 음성 인식, 이미지 처리, 음악, 게임 등
-INFO:__main__:  Q: 안녕?
-  A: 안녕하십니까? 안녕하세요, [교수 이름]입니다. 오늘은 '안녕하십이'라는 단어를 사용합니다. 안녕하십이란 단어는 "위대한 의미를 담은 단어
-```
-* 1만스텝 기준에서 아직 내용을 이해하지 못하지만 문법은 잘 사용하는 모습
-
-
-### 학습 곡선 분석
-
-```
-단계별 손실 감소:
-
-Step 0-2000:        손실 빠른 감소 (70 → 20)
-Step 2000-5000:     문법 학습 시작
-Step 5000-9700:     안정화 진입 ← 현재 위치
-Step 10000+:        의미 이해 강화 (예상)
-Step 20000+:        정교한 생성 능력 (목표)
-Step 50000:         완성 (최종 목표)
-```
-
----
-
-## 📚 데이터셋
-
-학습에 사용되는 **공개 한국어 데이터셋**:
-
-| 데이터셋 | 출처 | 크기 | 특징 |
-|---------|------|------|------|
-| **Korean Textbooks** | maywell | ~50M tokens | 교과서 텍스트 |
-| **OpenOrca-gugugo-ko** | squarelike | ~200M tokens | 명령어-응답 쌍 |
-| **KoAlpaca** | beomi | ~100M tokens | Alpaca 스타일 |
-
-**특징:**
-- ✅ 자동 다운로드 (첫 실행 시만)
-- ✅ 로컬 Parquet 캐싱 (빠른 재사용)
-- ✅ 자동 필드 감지 (text, instruction+output 등)
-- ✅ 해시 기반 버전 관리
-- ✅ 최대 3회 자동 재시도
-
----
-
-## 🎓 자세한 사용 가이드
-
-### 기본 학습
-
-```python
-from korean_llm_advanced_v2 import TrainingConfig, main
-
-config = TrainingConfig(
-    batch_size=2,
-    max_steps=50000,
-    learning_rate=5e-5,
-    warmup_steps=200,
-    eval_interval=500,
-    checkpoint_interval=500,
-)
-
-main(config)
-```
-
-### 이전 체크포인트에서 재개
-
-```python
-config = TrainingConfig(
-    resume_from_checkpoint='latest'  # 자동 최신 찾기
-)
-
-main(config)
-```
-
-또는
-
-```python
-config = TrainingConfig(
-    resume_from_checkpoint='checkpoints/korean_llm_05000.pth'  # 특정 체크포인트
-)
-
-main(config)
-```
-
-### 커스텀 하이퍼파라미터
-
-```python
-config = TrainingConfig(
-    # 배치 처리
-    batch_size=1,
-    accumulation_steps=128,
-    
-    # 모델
-    max_seq_len=512,
-    
-    # 학습
-    max_steps=100000,
-    learning_rate=3e-5,
-    warmup_steps=500,
-    
-    # 최적화
-    use_bfloat16=True,
-    
-    # 데이터
-    num_workers=8,
-    samples_per_dataset=None,  # None = 전체 사용
-    
-    # 평가
-    eval_interval=1000,
-    checkpoint_interval=1000,
-)
-
-main(config)
-```
-
-### 추론/생성
-
-```python
+import os
 import torch
-from transformers import AutoTokenizer
-from korean_llm_advanced_v2 import KoreanLLM, generate
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, IterableDataset, Dataset
+from datasets import load_dataset, concatenate_datasets, DatasetDict, Dataset as HFDataset
+from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+from torch.utils.checkpoint import checkpoint
+import random
+from typing import Optional, Tuple, List, Dict
+from dataclasses import dataclass
+import logging
+import json
+from pathlib import Path
+import hashlib
+import time
 
-# 토크나이저 로드
-tokenizer = AutoTokenizer.from_pretrained("beomi/Llama-3-Open-Ko-8B")
+# ==========================================
+# 로깅 설정
+# ==========================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 체크포인트에서 모델 로드
-checkpoint = torch.load('checkpoints/korean_llm_09700.pth', 
-                        map_location='cuda')
-model = KoreanLLM(
-    vocab_size=len(tokenizer),
-    pad_token_id=tokenizer.pad_token_id,
-).cuda()
-model.load_state_dict(checkpoint['model_state_dict'])
+# ==========================================
+# 데이터셋 기본 설정
+# ==========================================
 
-# 텍스트 생성
-prompt = "한국의 수도는"
-response = generate(
-    model, 
+DATASETS_DIR = Path("./datasets")
+DATASETS_CACHE_DIR = DATASETS_DIR / "cache"
+DATASETS_MANIFEST_FILE = DATASETS_DIR / "datasets_manifest.json"
+
+def ensure_datasets_dir():
+    """데이터셋 디렉토리 생성"""
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    DATASETS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ Datasets directory ready: {DATASETS_DIR.absolute()}")
+
+# ==========================================
+# 데이터셋 다운로드 및 관리
+# ==========================================
+
+class DatasetManager:
+    """로컬 데이터셋 관리 클래스"""
+    
+    DATASETS_CONFIG = [
+        {
+            "name": "maywell/korean_textbooks",
+            "config": "tiny-textbooks",
+            "split": "train",
+            "text_key": "text"
+        },
+        {
+            "name": "squarelike/OpenOrca-gugugo-ko",
+            "config": None,
+            "split": "train",
+            # OpenOrca 구조에 맞춰 질문/응답 필드 지정
+            "text_keys": ["question", "response"], 
+            "system_key": "system_prompt" # 옵션
+        },
+        {
+            "name": "beomi/KoAlpaca-v1.1a",
+            "config": None,
+            "split": "train",
+            "text_keys": ["instruction", "output"]
+        }
+    ]
+    
+    def __init__(self, cache_dir: Path = DATASETS_CACHE_DIR):
+        self.cache_dir = cache_dir
+        self.manifest = self._load_manifest()
+        ensure_datasets_dir()
+    
+    def _load_manifest(self) -> Dict:
+        """매니페스트 파일 로드"""
+        if DATASETS_MANIFEST_FILE.exists():
+            with open(DATASETS_MANIFEST_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    
+    def _save_manifest(self):
+        """매니페스트 파일 저장"""
+        with open(DATASETS_MANIFEST_FILE, 'w') as f:
+            json.dump(self.manifest, f, indent=2)
+    
+    def _get_dataset_hash(self, config: Dict) -> str:
+        """데이터셋 config의 해시값 생성"""
+        config_str = json.dumps(config, sort_keys=True)
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
+    
+    def download_dataset(self, config: Dict, force: bool = False) -> Optional[str]:
+        """
+        데이터셋 다운로드 (실패 시 최대 3번 다른 방식으로 재시도)
+        
+        Args:
+            config: 데이터셋 설정
+            force: 기존 캐시 무시하고 다시 다운로드
+        
+        Returns:
+            로컬 캐시 경로 또는 None
+        """
+        dataset_hash = self._get_dataset_hash(config)
+        dataset_name = config['name']
+        
+        # 캐시 확인
+        if dataset_hash in self.manifest and not force:
+            cached_path = self.manifest[dataset_hash].get('path')
+            if cached_path and Path(cached_path).exists():
+                logger.info(f"✅ Using cached dataset: {dataset_name}")
+                return cached_path
+        
+        logger.info(f"📥 Downloading {dataset_name}...")
+        
+        # 재시도 전략 정의 (최대 3회)
+        strategies = [
+            {"name": "standard", "streaming": False, "force_redownload": False},
+            {"name": "streaming", "streaming": True, "force_redownload": False},
+            {"name": "force_redownload", "streaming": False, "force_redownload": True},
+        ]
+        
+        last_error = None
+        
+        for attempt, strategy in enumerate(strategies, 1):
+            try:
+                logger.info(f"🔄 Attempt {attempt}/3 - Strategy: {strategy['name']}")
+                
+                load_kwargs = {
+                    "path": config["name"],
+                    "split": config["split"],
+                    "cache_dir": str(self.cache_dir),
+                }
+                
+                if config.get("config"):
+                    load_kwargs["name"] = config["config"]
+                
+                if strategy["streaming"]:
+                    load_kwargs["streaming"] = True
+                
+                if strategy["force_redownload"]:
+                    load_kwargs["download_mode"] = "force_redownload"
+                
+                # 데이터셋 로드
+                ds = load_dataset(**load_kwargs)
+                
+                # 스트리밍인 경우 전체 데이터를 메모리로 가져오기
+                if strategy["streaming"]:
+                    logger.info("📥 Converting streaming dataset to regular dataset...")
+                    ds = HFDataset.from_list(list(ds))
+                
+                # 로컬 저장 (parquet 형식)
+                local_path = self.cache_dir / f"{dataset_hash}"
+                local_path.mkdir(exist_ok=True)
+                
+                ds.to_parquet(str(local_path / "data.parquet"))
+                
+                # 메타데이터 저장
+                self.manifest[dataset_hash] = {
+                    'name': dataset_name,
+                    'config': config,
+                    'path': str(local_path),
+                    'num_examples': len(ds),
+                    'download_strategy': strategy['name']
+                }
+                self._save_manifest()
+                
+                logger.info(f"✅ Dataset saved: {local_path} ({len(ds)} examples) via {strategy['name']}")
+                return str(local_path)
+            
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']}): {e}")
+                
+                if attempt < 3:
+                    wait_time = attempt * 2  # 2초, 4초 대기
+                    logger.info(f"⏳ Waiting {wait_time} seconds before next attempt...")
+                    time.sleep(wait_time)
+        
+        # 모든 시도 실패
+        logger.error(f"❌ Failed to download {dataset_name} after 3 attempts. Last error: {last_error}")
+        return None
+    
+    def get_or_download_all(self, force: bool = False) -> List[str]:
+        """모든 데이터셋 다운로드 또는 캐시 로드"""
+        paths = []
+        for config in self.DATASETS_CONFIG:
+            path = self.download_dataset(config, force=force)
+            if path:
+                paths.append(path)
+        
+        logger.info(f"✅ Ready with {len(paths)} datasets")
+        return paths
+
+# ==========================================
+# 로컬 데이터셋 클래스
+# ==========================================
+
+class LocalKoreanDataset(Dataset):
+    """로컬 파일에서 로드하는 한국어 데이터셋"""
+    
+    def __init__(
+        self,
+        dataset_paths: List[str],
+        tokenizer,
+        max_len: int = 256,
+        data_samples_per_dataset: Optional[int] = None
+    ):
+        """
+        Args:
+            dataset_paths: 로컬 데이터셋 경로 리스트
+            tokenizer: 토크나이저
+            max_len: 최대 시퀀스 길이
+            data_samples_per_dataset: 데이터셋당 사용할 샘플 수 (None이면 전체)
+        """
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        self.samples = []
+        
+        logger.info("📚 Loading local datasets...")
+        
+        # 모든 데이터셋에서 샘플 로드
+        for dataset_path in dataset_paths:
+            try:
+                # parquet 파일 로드
+                parquet_file = Path(dataset_path) / "data.parquet"
+                if not parquet_file.exists():
+                    logger.warning(f"Parquet file not found: {parquet_file}")
+                    continue
+                
+                ds = HFDataset.from_parquet(str(parquet_file))
+                
+                # 샘플 수 제한
+                if data_samples_per_dataset:
+                    ds = ds.select(range(min(len(ds), data_samples_per_dataset)))
+                
+                # 텍스트 추출
+                texts = self._extract_texts(ds)
+                self.samples.extend(texts)
+                
+                logger.info(f"✅ Loaded {len(texts)} samples from {Path(dataset_path).name}")
+            
+            except Exception as e:
+                logger.error(f"❌ Error loading dataset from {dataset_path}: {e}")
+                continue
+        
+        logger.info(f"✅ Total samples loaded: {len(self.samples)}")
+    
+    def _extract_texts(self, ds) -> List[str]:
+        """데이터셋에서 텍스트 추출"""
+        texts = []
+        
+        for item in ds:
+            text = None
+            
+            # 1. 단일 text 필드가 있는 경우
+            if "text" in item and item["text"]:
+                text = item["text"]
+            
+            # 2. OpenOrca 데이터셋 (system_prompt, question, response)
+            elif "question" in item and "response" in item:
+                system_str = f"### 시스템: {item['system_prompt']}\n" if item.get("system_prompt") else ""
+                text = f"{system_str}### 지시: {item['question']}\n### 응답: {item['response']}"
+            
+            # 3. KoAlpaca 등 (instruction, output)
+            elif "instruction" in item and "output" in item:
+                text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
+            
+            # 4. 기타 (question, answer)
+            elif "question" in item and "answer" in item:
+                text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
+            
+            # 5. 기타 (prompt, response)
+            elif "prompt" in item and "response" in item:
+                text = f"### 프롬프트: {item['prompt']}\n### 응답: {item['response']}"
+            
+            if text and len(text) > 5:
+                texts.append(text)
+        
+        return texts
+    
+    def __len__(self) -> int:
+        return len(self.samples)
+    
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """토크나이징된 텐서 반환"""
+        text = self.samples[idx]
+        
+        try:
+            # EOS 토큰 추가
+            text_with_eos = text + self.tokenizer.eos_token
+            
+            # 토크나이징
+            encoded = self.tokenizer.encode(
+                text_with_eos,
+                truncation=True,
+                max_length=self.max_len
+            )
+            
+            # 패딩
+            if len(encoded) < self.max_len:
+                encoded += [self.tokenizer.pad_token_id] * (self.max_len - len(encoded))
+            else:
+                encoded = encoded[:self.max_len]
+            
+            return torch.tensor(encoded, dtype=torch.long)
+        
+        except Exception as e:
+            logger.warning(f"Tokenization error: {e}")
+            # 폴백: 패딩된 토큰 반환
+            return torch.full((self.max_len,), self.tokenizer.pad_token_id, dtype=torch.long)
+
+def collate_fn(batch: List[torch.Tensor]) -> torch.Tensor:
+    """배치 콜레이션"""
+    return torch.stack(batch)
+
+# ==========================================
+# 1. 아키텍처 (개선된 버전 - 기존 코드 유지)
+# ==========================================
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization"""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+    
+    def forward(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> Tuple[torch.Tensor, torch.Tensor]:
+    """RoPE(Rotary Position Embedding) 주파수 사전계산"""
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, dtype=freqs.dtype)
+    freqs = torch.outer(t, freqs)
+    return torch.cos(freqs), torch.sin(freqs)
+
+def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """RoPE 적용"""
+    d = x.shape[-1]
+    x1, x2 = x[..., :d//2], x[..., d//2:]
+    return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+
+class SwiGLU(nn.Module):
+    """SwiGLU 활성화 함수"""
+    def __init__(self, dim: int, hidden_dim: int):
+        super().__init__()
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+    
+    def forward(self, x):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
+class Attention(nn.Module):
+    """Multi-Head Attention with KV-Cache"""
+    def __init__(self, dim: int, n_heads: int):
+        super().__init__()
+        assert dim % n_heads == 0
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        
+        self.wq = nn.Linear(dim, dim, bias=False)
+        self.wk = nn.Linear(dim, dim, bias=False)
+        self.wv = nn.Linear(dim, dim, bias=False)
+        self.wo = nn.Linear(dim, dim, bias=False)
+    
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        f_cos: torch.Tensor, 
+        f_sin: torch.Tensor, 
+        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        b, s, d = x.shape
+        
+        q = self.wq(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.wk(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.wv(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
+        
+        q = apply_rotary_emb(q, f_cos, f_sin)
+        k = apply_rotary_emb(k, f_cos, f_sin)
+        
+        if kv_cache is not None:
+            pk, pv = kv_cache
+            k = torch.cat([pk, k], dim=2)
+            v = torch.cat([pv, v], dim=2)
+        
+        new_kv = (k.detach(), v.detach())
+        
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=mask,
+            is_causal=(mask is None and s > 1)
+        )
+        
+        out = out.transpose(1, 2).contiguous().view(b, s, d)
+        return self.wo(out), new_kv
+
+class TransformerBlock(nn.Module):
+    """Transformer 블록"""
+    def __init__(self, dim: int, n_heads: int, hidden_dim: int):
+        super().__init__()
+        self.attention = Attention(dim, n_heads)
+        self.feed_forward = SwiGLU(dim, hidden_dim)
+        self.attention_norm = RMSNorm(dim)
+        self.ffn_norm = RMSNorm(dim)
+    
+    def forward(
+        self,
+        x: torch.Tensor,
+        f_cos: torch.Tensor,
+        f_sin: torch.Tensor,
+        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        normed_x = self.attention_norm(x)
+        h, new_kv = self.attention(normed_x, f_cos, f_sin, kv_cache=kv_cache)
+        x = x + h
+        x = x + self.feed_forward(self.ffn_norm(x))
+        return x, new_kv
+
+class KoreanLLM(nn.Module):
+    """한국어 LLM 모델"""
+    def __init__(
+        self,
+        vocab_size: int,
+        pad_token_id: int,
+        dim: int = 1280,
+        n_layers: int = 20,
+        n_heads: int = 10,
+        max_seq_len: int = 1024
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.pad_token_id = pad_token_id
+        self.dim = dim
+        self.n_heads = n_heads
+        
+        self.embed = nn.Embedding(vocab_size, dim)
+        self.layers = nn.ModuleList([
+            TransformerBlock(dim, n_heads, int(dim * 2.5))
+            for _ in range(n_layers)
+        ])
+        self.norm = RMSNorm(dim)
+        self.output = nn.Linear(dim, vocab_size, bias=False)
+        self.output.weight = self.embed.weight
+        
+        f_cos, f_sin = precompute_freqs_cis(dim // n_heads, max_seq_len * 2)
+        self.register_buffer("f_cos", f_cos)
+        self.register_buffer("f_sin", f_sin)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, std=0.02)
+    
+    def _get_freqs(self, f: torch.Tensor, start: int, length: int) -> torch.Tensor:
+        return f[start:start + length].unsqueeze(0).unsqueeze(0)
+    
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+        kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[Tuple[torch.Tensor, torch.Tensor]]]:
+        b, s = tokens.shape
+        x = self.embed(tokens)
+        
+        start_pos = 0
+        if kv_caches is not None and len(kv_caches) > 0 and kv_caches[0][0] is not None:
+            start_pos = kv_caches[0][0].shape[2]
+        
+        f_cos = self._get_freqs(self.f_cos, start_pos, s)
+        f_sin = self._get_freqs(self.f_sin, start_pos, s)
+        
+        new_kv_caches = []
+        for i, layer in enumerate(self.layers):
+            if self.training:
+                x, kv = checkpoint(
+                    layer, x, f_cos, f_sin, None,
+                    use_reentrant=False
+                )
+            else:
+                kv_cache = kv_caches[i] if kv_caches else None
+                x, kv = layer(x, f_cos, f_sin, kv_cache=kv_cache)
+            
+            new_kv_caches.append(kv)
+        
+        x = self.norm(x)
+        logits = self.output(x)
+        
+        loss = None
+        if labels is not None:
+            loss = F.cross_entropy(
+                logits[..., :-1, :].reshape(-1, logits.size(-1)),
+                labels[..., 1:].reshape(-1),
+                ignore_index=self.pad_token_id
+            )
+        
+        return logits, loss, new_kv_caches
+
+# ==========================================
+# 3. 생성 함수
+# ==========================================
+
+@torch.no_grad()
+def generate(
+    model: nn.Module,
     tokenizer,
-    prompt=prompt,
-    max_tokens=100,
-    temperature=0.7,
-    top_k=40,
-    device=torch.device('cuda')
-)
-
-print(f"질문: {prompt}")
-print(f"답변: {response}")
-```
-
----
-
-## 🔧 상세 설치 가이드
-
-### Windows
-
-#### 1. CUDA 설치
-```
-1. https://developer.nvidia.com/cuda-downloads 방문
-2. Windows → x86_64 → Windows 11/10 → Local 선택
-3. CUDA 11.8 또는 12.1 다운로드 및 설치
-4. 기본 설정 사용
-5. 컴퓨터 재부팅
-```
-
-#### 2. 환경 변수 설정
-```
-시스템 환경 변수 편집:
-
-CUDA_HOME = C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
-
-PATH에 추가:
-%CUDA_HOME%\bin
-%CUDA_HOME%\libnvvp
-```
-
-#### 3. cuDNN 설치 (선택)
-```
-1. https://developer.nvidia.com/cudnn 방문
-2. cuDNN 8.9+ for CUDA 11.x 다운로드 (가입 필요)
-3. 압축 해제
-4. bin/, lib/, include/ → CUDA_HOME에 복사
-```
-
-#### 4. 확인
-```bash
-nvcc --version  # CUDA 버전 확인
-nvidia-smi      # GPU 확인
-```
-
-### Linux (Ubuntu)
-
-```bash
-# CUDA 설치
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-repo-ubuntu2204_12.1.0-1_amd64.deb
-sudo dpkg -i cuda-repo-ubuntu2204_12.1.0-1_amd64.deb
-sudo apt-get update
-sudo apt-get -y install cuda
-
-# 환경 변수 설정
-export CUDA_HOME=/usr/local/cuda
-export PATH=$CUDA_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-```
-
-### macOS
-
-```bash
-# GPU 없이 CPU로만 학습 (매우 느림)
-pip install torch torchvision torchaudio
-
-# M1/M2 칩 (Metal 가속)
-pip install torch torchvision torchaudio
-```
-
----
-
-## 🐛 문제 해결
-
-### "CUDA out of memory" 에러
-
-**원인**: GPU 메모리 부족
-
-**해결책**:
-```python
-# 1. 배치 사이즈 줄이기
-config.batch_size = 1
-
-# 2. 시퀀스 길이 줄이기
-config.max_seq_len = 128
-
-# 3. 그래디언트 누적 늘리기
-config.accumulation_steps = 256
-
-# 4. 모델 크기 줄이기 (극단적인 경우)
-model = KoreanLLM(
-    vocab_size=len(tokenizer),
-    pad_token_id=tokenizer.pad_token_id,
-    dim=512,      # 기본값: 1280
-    n_layers=12,  # 기본값: 20
-)
-```
-
-### PyTorch가 GPU를 인식하지 못함
-
-```bash
-# 1. 버전 확인
-python -c "import torch; print(torch.version.cuda)"
-python -c "import torch; print(torch.cuda.is_available())"
-
-# 2. CUDA 설치 확인
-nvcc --version
-
-# 3. 재설치
-pip uninstall torch torchvision torchaudio -y
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# 4. 재부팅
-```
-
-### 데이터셋 다운로드 실패
-
-```python
-# 자동 재시도 (3회)
-config = TrainingConfig(download_datasets=True)
-main(config)
-
-# 또는 강제 재다운로드
-from korean_llm_advanced_v2 import DatasetManager
-manager = DatasetManager()
-manager.get_or_download_all(force=True)
-```
-
-### 모델 로드 실패
-
-```bash
-# 체크포인트 파일 확인
-ls -lah checkpoints/
-
-# 손상된 체크포인트 삭제
-rm checkpoints/korean_llm_*.pth
-
-# 처음부터 시작
-config = TrainingConfig(resume_from_checkpoint=None)
-main(config)
-```
-
----
-
-## ❓ FAQ
-
-**Q: 학습에 얼마나 걸리나요?**  
-A: 50,000 스텝 완료에 약 60시간 필요합니다 (RTX 5090 기준).
-- RTX 4090: ~70시간
-- RTX 4080: ~100시간
-- RTX 4070: ~150시간
-
-**Q: 모델이 언제 쓸만해질까요?**  
-A: 일반적으로 20,000 스텝 이후 기초 의미 이해가 보입니다.
-- 10K: 한국어 문법 학습
-- 20K: 기초 의미 이해
-- 30K: 관련 주제 생성
-- 50K: 고급 기능
-
-**Q: 다른 GPU에서도 되나요?**  
-A: 네! 4GB부터 80GB까지 모두 지원합니다.
-[GPU별 권장 설정](#gpu별-권장-설정) 섹션을 참고하세요.
-
-**Q: CPU로만 학습할 수 있나요?**  
-A: 기술적으로는 가능하지만, 속도가 **100배 이상 느립니다**.
-GPU 사용을 강력히 권장합니다.
-
-**Q: 온도 관리는 어떻게 하나요?**  
-A: 일반적인 안전 범위:
-- GPU: 70-80°C (최대 90°C)
-- CPU: 80-95°C (정상)
-
-온도가 높으면:
-- 노트북 스탠드 사용
-- 선풍기로 냉각
-- 배경 프로세스 종료
-
-**Q: 배치 사이즈를 더 크게 할 수 있나요?**  
-A: GPU 메모리가 허락하면 가능합니다.
-다만, CUDA out of memory 위험이 있으니 천천히 증가시키세요.
-
-**Q: 학습 중간에 멈춰도 괜찮나요?**  
-A: 네, 자동으로 마지막 체크포인트에서 재개됩니다.
-`resume_from_checkpoint='latest'` 사용.
-
-**Q: 다른 데이터셋을 사용할 수 있나요?**  
-A: 코드를 수정하면 가능합니다.
-`DatasetManager.DATASETS_CONFIG`를 수정하세요.
-
-**Q: 모델을 내보낼 수 있나요?**  
-A: 예정 중입니다. 현재는 체크포인트 형식만 지원합니다.
-
-**Q: 추론 속도는 얼마나 되나요?**  
-A: RTX 5090에서 약 114 tokens/sec입니다.
-다른 GPU에서는 비례적으로 변합니다.
-
----
-
-## 📚 참고 자료
-
-### 논문
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Transformer
-- [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://arxiv.org/abs/2104.09864) - RoPE
-- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971) - LLaMA
-
-### 공식 문서
-- [PyTorch 문서](https://pytorch.org/docs/stable/index.html)
-- [Hugging Face Transformers](https://huggingface.co/docs/transformers/)
-- [CUDA Toolkit 문서](https://docs.nvidia.com/cuda/)
-- [PyTorch Lightning](https://www.pytorchlightning.ai/)
-
-### 한국어 LLM
-- [Beomi's Open Ko LLM](https://huggingface.co/beomi)
-- [Open Ko-LLaMA](https://github.com/open-ko-llama)
-- [KoGPT](https://huggingface.co/kakaobrain/kogpt)
-
-### 커뮤니티
-- [Hugging Face 커뮤니티](https://huggingface.co/discussions)
-- [PyTorch 포럼](https://discuss.pytorch.org/)
-- [AI Korea Slack](https://aistartup-korea.slack.com)
-
----
-
-## ⚖️ 라이센스
-
-MIT License - 자유롭게 사용하세요! 🎉
-
-본 프로젝트는 MIT 라이센스 하에 배포됩니다. 자유롭게 사용, 수정, 배포할 수 있습니다.
-
-자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
-
----
-
-## 👨‍💻 개발자
-
-| 항목 | 내용 |
-|------|------|
-| **프로젝트** | Korean LLM V2 |
-| **개발자** | seoan1210 |
-| **시작 날짜** | 2026-07-25 |
-| **상태** | 🚀 활발히 개발 중 |
-| **라이선스** | MIT |
-
-### 개발 환경 (테스트용)
-- Lenovo Legion 7 Pro
-- NVIDIA RTX 5090 (24GB)
-- 64GB DDR5 RAM
-- Windows 11
-
-이 환경에서 벤치마크를 수행했지만, **코드는 모든 GPU에서 동작**하도록 설계되었습니다.
-
----
-
-## 🤝 기여하기
-
-이 프로젝트에 기여해주세요!
-
-### 기여 방법
-1. **Fork** 하기
-2. **Branch** 생성: `git checkout -b feature/amazing-feature`
-3. **Commit** 하기: `git commit -m 'Add amazing feature'`
-4. **Push** 하기: `git push origin feature/amazing-feature`
-5. **Pull Request** 열기
-
-### 환영하는 기여
-- 🐛 버그 리포트 및 수정
-- 📚 문서 개선
-- 🔧 성능 최적화
-- 🌍 다른 언어/플랫폼 지원
-- 💡 새로운 기능 제안
-
----
-
-## 💬 문의 & 피드백
-
-- 🐛 **버그 리포트**: [GitHub Issues](https://github.com/seoan1210/korean-llm-v2/issues)
-
----
-
-## 🙏 감사의 말
-
-이 프로젝트가 가능했던 것은 다음 덕분입니다:
-
-### 오픈소스 & 라이브러리
-- 🤗 **Hugging Face** - 데이터셋, 토크나이저, 모델 생태계
-- 🔥 **PyTorch 커뮤니티** - 강력한 딥러닝 프레임워크
-- 🎓 **NVIDIA** - CUDA, cuDNN, GPU 기술
-
-### 데이터셋 제공자
-- 📚 **maywell** - Korean Textbooks
-- 🔄 **squarelike** - OpenOrca-gugugo-ko
-- 🦙 **beomi** - KoAlpaca & 한국어 토크나이저
-
-### 커뮤니티
-- 🇰🇷 한국 PyTorch 커뮤니티
-- 🤖 AI Korea 커뮤니티
-- 💡 오픈소스 개발자들
-
----
-
-## 📊 프로젝트 통계
-
-```
-📁 코드: 1,300 라인 (korean_llm_advanced_v2.py)
-📚 문서: 완벽한 README.md
-🧪 테스트: 자동 검증 스크립트 포함
-⚡ 속도: 4.5 초/스텝 (RTX 5090)
-📈 손실: 1.50 ± 0.08 (현재)
-🎯 목표: 50,000 스텝
-```
-
----
-
-## 🚀 로드맵
-
-| 단계 | 목표 스텝 | 상태 |
-|------|---------|------|
-| 첫 수렴 | 10K | 🔄 진행 중 |
-| 기초 의미 | 20K | ⏳ 예정 |
-| 안정적 생성 | 30K | ⏳ 예정 |
-| 고급 기능 | 40K | ⏳ 예정 |
-| 완성 & 배포 | 50K | ⏳ 예정 |
-
----
-
-<div align="center">
-
-## ⭐ 도움이 되었다면 스타를 눌러주세요! ⭐
-
-**Made with ❤️ and 🤖 in Korea**
-
-모두를 위한 한국어 LLM 프로젝트
-
-[이슈 보고](https://github.com/seoan1210/korean-llm-v2/issues) • 
-[Pull Request](https://github.com/seoan1210/korean-llm-v2/pulls)
-
-```
- 🇰🇷
-한국어 LLM V2
- 열심히 학습 중!
-   ▲▲▲
-  ▲△▲△▲
- ▲△▲☆▲△▲
-```
-
-[위로 가기 ⬆️](#-korean-llm-v2)
-
-</div>
-
----
-
-**Happy Training! 🚀🇰🇷**
+    prompt: str = "안녕? 너는 누구니?",
+    max_tokens: int = 100,
+    temperature: float = 0.7,
+    top_k: int = 40,
+    device: torch.device = None
+) -> str:
+    if device is None:
+        device = next(model.parameters()).device
+    
+    model.eval()
+    
+    prompt_text = f"### 지시: {prompt}\n### 응답:"
+    tokens = tokenizer.encode(prompt_text, return_tensors="pt").to(device)
+    
+    kv_caches = None
+    output_tokens = tokens
+    
+    for step in range(max_tokens):
+        input_tokens = output_tokens[:, -1:] if kv_caches is not None else output_tokens
+        
+        with torch.no_grad():
+            logits, _, kv_caches = model(input_tokens, kv_caches=kv_caches)
+        
+        next_logits = logits[:, -1, :] / temperature
+        
+        if top_k > 0:
+            indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][..., -1, None]
+            next_logits[indices_to_remove] = float('-inf')
+        
+        probs = F.softmax(next_logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1)
+        
+        output_tokens = torch.cat([output_tokens, next_token], dim=1)
+        
+        if next_token.item() == tokenizer.eos_token_id:
+            break
+        
+        if output_tokens.shape[1] > 512:
+            logger.warning("Generated sequence too long, truncating")
+            break
+    
+    generated_text = tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+    response = generated_text.split("### 응답:")[-1].strip() if "### 응답:" in generated_text else generated_text
+    
+    model.train()
+    return response
+
+# ==========================================
+# 4. 체크포인트 저장/로드
+# ==========================================
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    step: int,
+    checkpoint_path: str
+):
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    
+    checkpoint = {
+        'step': step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+    }
+    
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"✅ Checkpoint saved: {checkpoint_path}")
+
+def load_checkpoint(
+    checkpoint_path: str,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device
+) -> int:
+    if not os.path.exists(checkpoint_path):
+        logger.error(f"Checkpoint not found: {checkpoint_path}")
+        return 0
+    
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        model.load_state_dict(checkpoint['model_state_dict'])
+        logger.info("✅ Model state loaded")
+        
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        logger.info("✅ Optimizer state loaded")
+        
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        logger.info("✅ Scheduler state loaded")
+        
+        start_step = checkpoint['step']
+        logger.info(f"✅ Checkpoint loaded from step {start_step}")
+        
+        return start_step
+    
+    except Exception as e:
+        logger.error(f"Error loading checkpoint: {e}")
+        return 0
+
+def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
+    if not os.path.exists(checkpoint_dir):
+        return None
+    
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
+    
+    if not checkpoints:
+        return None
+    
+    checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    
+    latest = checkpoints[-1]
+    latest_path = os.path.join(checkpoint_dir, latest)
+    logger.info(f"Found latest checkpoint: {latest}")
+    
+    return latest_path
+
+# ==========================================
+# 5. 메인 학습 루프
+# ==========================================
+
+@dataclass
+class TrainingConfig:
+    """학습 설정"""
+    batch_size: int = 2
+    max_steps: int = 50000
+    accumulation_steps: int = 32
+    learning_rate: float = 5e-5
+    warmup_steps: int = 200
+    checkpoint_interval: int = 100
+    eval_interval: int = 500
+    max_seq_len: int = 256
+    num_workers: int = 4
+    use_bfloat16: bool = True
+    seed: int = 42
+    resume_from_checkpoint: Optional[str] = None
+    # 새로운 옵션들
+    download_datasets: bool = False  # True면 데이터셋 다시 다운로드
+    samples_per_dataset: Optional[int] = None  # None이면 전체 사용
+
+def setup_distributed(rank: int = 0, world_size: int = 1):
+    """분산학습 설정"""
+    random.seed(42 + rank)
+    torch.manual_seed(42 + rank)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42 + rank)
+
+def main(config: TrainingConfig = TrainingConfig()):
+    """메인 학습 함수 (로컬 데이터셋 기반)"""
+    setup_distributed()
+    ensure_datasets_dir()
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+    logger.info(f"📂 Datasets directory: {DATASETS_DIR.absolute()}")
+    
+    # ============================================
+    # 1. 토크나이저 로드
+    # ============================================
+    logger.info("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        "beomi/Llama-3-Open-Ko-8B",
+        clean_up_tokenization_spaces=False
+    )
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    # ============================================
+    # 2. 데이터셋 다운로드 및 로드
+    # ============================================
+    logger.info("Setting up datasets...")
+    manager = DatasetManager()
+    
+    # 데이터셋 다운로드 (또는 캐시 로드)
+    dataset_paths = manager.get_or_download_all(force=config.download_datasets)
+    
+    if not dataset_paths:
+        logger.error("❌ No datasets available!")
+        return
+    
+    # 로컬 데이터셋 생성
+    dataset = LocalKoreanDataset(
+        dataset_paths=dataset_paths,
+        tokenizer=tokenizer,
+        max_len=config.max_seq_len,
+        data_samples_per_dataset=config.samples_per_dataset
+    )
+    
+    if len(dataset) == 0:
+        logger.error("❌ Dataset is empty!")
+        return
+    
+    # 데이터로더
+    loader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        shuffle=True,
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    # ============================================
+    # 3. 모델 생성
+    # ============================================
+    logger.info("Creating model...")
+    model = KoreanLLM(
+        vocab_size=len(tokenizer),
+        pad_token_id=tokenizer.pad_token_id,
+        dim=1280,
+        n_layers=20,
+        n_heads=10,
+        max_seq_len=config.max_seq_len
+    ).to(device)
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model: {total_params / 1e6:.1f}M total params, {trainable_params / 1e6:.1f}M trainable")
+    
+    # ============================================
+    # 4. 옵티마이저와 스케줄러
+    # ============================================
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=config.warmup_steps,
+        num_training_steps=config.max_steps
+    )
+    scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
+    
+    # ============================================
+    # 5. 체크포인트 로드
+    # ============================================
+    start_step = 0
+    
+    if config.resume_from_checkpoint:
+        checkpoint_path = config.resume_from_checkpoint
+        
+        if checkpoint_path.lower() == 'latest':
+            checkpoint_path = find_latest_checkpoint()
+            if checkpoint_path is None:
+                logger.warning("No checkpoint found, starting from scratch")
+        
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            logger.info(f"🔄 Loading checkpoint from: {checkpoint_path}")
+            start_step = load_checkpoint(
+                checkpoint_path,
+                model,
+                optimizer,
+                scheduler,
+                device
+            )
+    
+    # ============================================
+    # 6. 학습 루프
+    # ============================================
+    logger.info(f"🚀 Starting training from step {start_step}...")
+    logger.info(f"📊 Dataset size: {len(dataset)} samples")
+    logger.info(f"📊 Total batches per epoch: {len(loader)}")
+    
+    model.train()
+    optimizer.zero_grad()
+    
+    running_loss = 0.0
+    step = start_step * config.accumulation_steps
+    
+    try:
+        epoch = 0
+        while step // config.accumulation_steps < config.max_steps:
+            epoch += 1
+            logger.info(f"\n📍 Epoch {epoch}")
+            
+            for batch_idx, batch in enumerate(loader):
+                if step // config.accumulation_steps >= config.max_steps:
+                    logger.info(f"Reached max steps ({config.max_steps}), stopping training")
+                    break
+                
+                batch = batch.to(device)
+                
+                # Forward pass with AMP
+                if device.type == 'cuda' and config.use_bfloat16:
+                    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                        _, loss, _ = model(batch, labels=batch)
+                        loss = loss / config.accumulation_steps
+                    
+                    scaler.scale(loss).backward()
+                else:
+                    _, loss_val, _ = model(batch, labels=batch)
+                    loss = loss_val / config.accumulation_steps
+                    loss.backward()
+                
+                running_loss += loss.item() * config.accumulation_steps
+                
+                # Progress indicator
+                if step % 4 == 0:
+                    print(".", end="", flush=True)
+                
+                # Gradient accumulation
+                if (step + 1) % config.accumulation_steps == 0:
+                    if device.type == 'cuda' and config.use_bfloat16:
+                        scaler.unscale_(optimizer)
+                    
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    
+                    if device.type == 'cuda' and config.use_bfloat16:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+                    
+                    optimizer.zero_grad()
+                    scheduler.step()
+                    
+                    # 로깅
+                    actual_step = (step + 1) // config.accumulation_steps
+                    avg_loss = running_loss / config.accumulation_steps
+                    lr = scheduler.get_last_lr()[0]
+                    
+                    print(f"\n[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}")
+                    
+                    running_loss = 0.0
+                    
+                    # 평가 및 저장
+                    if actual_step % config.eval_interval == 0:
+                        logger.info("\n📝 Generating samples...")
+                        prompts = [
+                            "한국의 수도는",
+                            "인공지능이란",
+                            "안녕?"
+                            ]
+                        for prompt in prompts:
+                            response = generate(
+                                model, tokenizer, prompt=prompt,
+                                max_tokens=50, temperature=0.7, device=device
+                            )
+                            logger.info(f"  Q: {prompt}\n  A: {response}")
+                        
+                        # 체크포인트 저장
+                        checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
+                        save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+                
+                step += 1
+    
+    except KeyboardInterrupt:
+        logger.info("\n⚠️ Training interrupted by user")
+        actual_step = step // config.accumulation_steps
+        checkpoint_path = f"checkpoints/korean_llm_interrupted_{actual_step:05d}.pth"
+        save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+    
+    except Exception as e:
+        logger.error(f"Training error: {e}", exc_info=True)
+    
+    logger.info("🎉 Training completed!")
+
+if __name__ == "__main__":
+    config = TrainingConfig(
+        batch_size=2,
+        accumulation_steps=32,
+        max_steps=50000,
+        warmup_steps=200,
+        learning_rate=5e-5,
+        eval_interval=1000,
+        resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
+        download_datasets=False,  # True로 바꾸면 강제로 다시 다운로드
+        samples_per_dataset=None
+    )
+    main(config)
