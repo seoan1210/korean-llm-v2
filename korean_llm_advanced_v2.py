@@ -40,460 +40,135 @@ def ensure_datasets_dir():
 # ==========================================
 
 class DatasetManager:
-    """로컬 데이터셋 관리 클래스"""
+    """로컬 데이터셋 관리"""
 
-    DATASETS_CONFIG = [
-        {
-            "name": "maywell/korean_textbooks",
-            "config": "tiny-textbooks",
-            "split": "train",
-            "text_key": "text"
-        },
-
-        {
-            "name": "squarelike/OpenOrca-gugugo-ko",
-            "manual": True,
-            "files": [
-                "ko-openorca_1M-GPT4-Augmented_split_0_to_2000_v6.json",
-                "ko-openorca_3_5M-GPT3.5-Augmented_split_0_to_2000.json"
-            ]
-        },
-
-        {
-            "name": "beomi/KoAlpaca-v1.1a",
-            "config": None,
-            "split": "train",
-            "text_keys": [
-                "instruction",
-                "output"
-            ]
-        }
+    DATASETS_CONFIG=[
+        {"name":"maywell/korean_textbooks","config":"tiny-textbooks","split":"train"},
+        {"name":"squarelike/OpenOrca-gugugo-ko","manual":True,"files":[
+            "ko-openorca_1M-GPT4-Augmented_split_0_to_2000_v6.json",
+            "ko-openorca_3_5M-GPT3.5-Augmented_split_0_to_2000.json"
+        ]},
+        {"name":"beomi/KoAlpaca-v1.1a","split":"train"}
     ]
 
-
-    def __init__(
-        self,
-        cache_dir: Path = DATASETS_CACHE_DIR
-    ):
-
-        self.cache_dir = cache_dir
-        self.cache_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        self.manifest = self._load_manifest()
-
+    def __init__(self,cache_dir=DATASETS_CACHE_DIR):
+        self.cache_dir=cache_dir
+        self.cache_dir.mkdir(parents=True,exist_ok=True)
+        self.manifest=self._load_manifest()
         ensure_datasets_dir()
 
-
-
     def _load_manifest(self):
-
         if DATASETS_MANIFEST_FILE.exists():
-
-            with open(
-                DATASETS_MANIFEST_FILE,
-                "r",
-                encoding="utf-8"
-            ) as f:
-
+            with open(DATASETS_MANIFEST_FILE,"r",encoding="utf-8") as f:
                 return json.load(f)
-
         return {}
 
-
-
     def _save_manifest(self):
+        with open(DATASETS_MANIFEST_FILE,"w",encoding="utf-8") as f:
+            json.dump(self.manifest,f,indent=2,ensure_ascii=False)
 
-        with open(
-            DATASETS_MANIFEST_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
+    def _hash(self,cfg):
+        return hashlib.md5(json.dumps(cfg,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:8]
 
-            json.dump(
-                self.manifest,
-                f,
-                indent=2,
-                ensure_ascii=False
-            )
+    def _cached(self,path):
+        return (Path(path)/"data.parquet").exists()
 
+    def download_openorca(self,cfg,force=False):
+        h=self._hash(cfg)
+        save=self.cache_dir/h
+        parquet=save/"data.parquet"
 
+        if parquet.exists() and not force:
+            logger.info("✅ Cached OpenOrca")
+            return str(save)
 
-    def _get_dataset_hash(
-        self,
-        config
-    ):
-
-        raw = json.dumps(
-            config,
-            sort_keys=True,
-            ensure_ascii=False
-        )
-
-        return hashlib.md5(
-            raw.encode()
-        ).hexdigest()[:8]
-
-
-
-    def _check_cache(
-        self,
-        dataset_hash
-    ):
-
-        if dataset_hash not in self.manifest:
-            return None
-
-
-        path = Path(
-            self.manifest[dataset_hash]["path"]
-        )
-
-
-        parquet = path / "data.parquet"
-
-
-        if parquet.exists():
-
-            return str(path)
-
-
-        return None
-
-
-
-    def download_openorca(
-        self,
-        config
-    ):
-
-        """
-        OpenOrca 수동 다운로드
-        HF Dataset builder 오류 우회
-        """
-
-        dataset_hash = self._get_dataset_hash(
-            config
-        )
-
-
-        cached = self._check_cache(
-            dataset_hash
-        )
-
-
-        if cached:
-
-            logger.info(
-                "✅ Cached OpenOrca"
-            )
-
-            return cached
-
-
-
-        logger.info(
-            "📥 Downloading OpenOrca manually"
-        )
-
+        save.mkdir(parents=True,exist_ok=True)
 
         from huggingface_hub import hf_hub_download
         from datasets import Dataset
 
+        rows=[]
 
-
-        all_rows = []
-
-
-
-        for filename in config["files"]:
-
-
-            logger.info(
-                f"⬇ {filename}"
-            )
-
-
-            json_path = hf_hub_download(
-                repo_id=
-                "squarelike/OpenOrca-gugugo-ko",
-
-                filename=filename,
-
+        for file in cfg["files"]:
+            logger.info(f"⬇ {file}")
+            path=hf_hub_download(
+                repo_id="squarelike/OpenOrca-gugugo-ko",
+                filename=file,
                 repo_type="dataset",
-
-                cache_dir=str(
-                    self.cache_dir
-                )
+                cache_dir=str(self.cache_dir)
             )
 
+            with open(path,"r",encoding="utf-8") as f:
+                data=json.load(f)
 
+            rows.extend(data)
+            logger.info(f"Loaded {len(data):,}")
 
-            logger.info(
-                "📖 Parsing json"
-            )
+        ds=Dataset.from_list(rows)
+        ds.to_parquet(str(parquet))
 
-
-
-            with open(
-                json_path,
-                "r",
-                encoding="utf-8"
-            ) as f:
-
-                data = json.load(f)
-
-
-
-            logger.info(
-                f"Loaded {len(data):,}"
-            )
-
-
-            all_rows.extend(
-                data
-            )
-
-
-
-        logger.info(
-            f"Total OpenOrca samples: {len(all_rows):,}"
-        )
-
-
-
-        ds = Dataset.from_list(
-            all_rows
-        )
-
-
-        save_dir = (
-            self.cache_dir /
-            dataset_hash
-        )
-
-
-        save_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-
-
-        parquet = (
-            save_dir /
-            "data.parquet"
-        )
-
-
-        logger.info(
-            "💾 Saving parquet"
-        )
-
-
-        ds.to_parquet(
-            str(parquet),
-            compression="snappy"
-        )
-
-
-
-        self.manifest[dataset_hash] = {
-
-            "name":
-            config["name"],
-
-            "path":
-            str(save_dir),
-
-            "num_examples":
-            len(ds)
-
+        self.manifest[h]={
+            "name":cfg["name"],
+            "path":str(save),
+            "num_examples":len(ds)
         }
-
 
         self._save_manifest()
+        return str(save)
 
+    def download_dataset(self,cfg,force=False):
+        h=self._hash(cfg)
 
+        if h in self.manifest and not force:
+            path=self.manifest[h]["path"]
+            if self._cached(path):
+                logger.info(f"✅ Cached {cfg['name']}")
+                return path
 
-        return str(save_dir)
+        if cfg.get("manual"):
+            return self.download_openorca(cfg,force)
 
+        logger.info(f"📥 Download {cfg['name']}")
 
-
-
-    def download_dataset(
-        self,
-        config,
-        force=False
-    ):
-
-
-        dataset_hash = self._get_dataset_hash(
-            config
-        )
-
-
-        if not force:
-
-
-            cached = self._check_cache(
-                dataset_hash
-            )
-
-
-            if cached:
-
-                logger.info(
-                    f"✅ Cached {config['name']}"
-                )
-
-                return cached
-
-
-
-        if config.get("manual"):
-
-            return self.download_openorca(
-                config
-            )
-
-
-
-        logger.info(
-            f"📥 Downloading {config['name']}"
-        )
-
-
-
-        kwargs = {
-
-            "path":
-            config["name"],
-
-            "split":
-            config["split"],
-
-            "cache_dir":
-            str(self.cache_dir)
-
+        args={
+            "path":cfg["name"],
+            "split":cfg["split"],
+            "cache_dir":str(self.cache_dir)
         }
 
+        if cfg.get("config"):
+            args["name"]=cfg["config"]
 
+        ds=load_dataset(**args)
 
-        if config.get("config"):
+        if isinstance(ds,DatasetDict):
+            ds=ds["train"]
 
-            kwargs["name"] = (
-                config["config"]
-            )
+        save=self.cache_dir/h
+        save.mkdir(parents=True,exist_ok=True)
 
+        ds.to_parquet(str(save/"data.parquet"))
 
-
-        ds = load_dataset(
-            **kwargs
-        )
-
-
-
-        if isinstance(
-            ds,
-            DatasetDict
-        ):
-
-            ds = ds["train"]
-
-
-
-        save_dir = (
-            self.cache_dir /
-            dataset_hash
-        )
-
-
-        save_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-
-
-        parquet = (
-            save_dir /
-            "data.parquet"
-        )
-
-
-
-        logger.info(
-            "💾 Saving parquet"
-        )
-
-
-        ds.to_parquet(
-            str(parquet),
-            compression="snappy"
-        )
-
-
-
-        self.manifest[dataset_hash] = {
-
-            "name":
-            config["name"],
-
-            "path":
-            str(save_dir),
-
-            "num_examples":
-            len(ds)
-
+        self.manifest[h]={
+            "name":cfg["name"],
+            "path":str(save),
+            "num_examples":len(ds)
         }
-
-
 
         self._save_manifest()
+        return str(save)
 
+    def get_or_download_all(self,force=False):
+        paths=[]
 
-
-        return str(save_dir)
-
-
-
-
-    def get_or_download_all(
-        self,
-        force=False
-    ):
-
-
-        paths = []
-
-
-
-        for config in self.DATASETS_CONFIG:
-
-
-            path = self.download_dataset(
-                config,
-                force
-            )
-
-
+        for cfg in self.DATASETS_CONFIG:
+            path=self.download_dataset(cfg,force)
             if path:
+                paths.append(path)
 
-                paths.append(
-                    path
-                )
-
-
-
-        logger.info(
-            f"✅ Ready datasets: {len(paths)}"
-        )
-
-
+        logger.info(f"✅ Ready datasets: {len(paths)}")
         return paths
+    
 # ==========================================
 # 로컬 데이터셋 클래스
 # ==========================================
@@ -1167,7 +842,7 @@ if __name__ == "__main__":
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=1000,
+        eval_interval=100,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
         download_datasets=False,  # True로 바꾸면 강제로 다시 다운로드
         samples_per_dataset=None
