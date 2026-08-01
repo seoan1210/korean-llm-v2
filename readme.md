@@ -67,7 +67,7 @@
 | ![Steps](https://img.shields.io/badge/Steps-9700%2F50000-orange?style=flat-square) | 진행 스텝 |
 | ![Loss](https://img.shields.io/badge/Loss-1.50%20±%200.08-yellow?style=flat-square) | 평균 손실값 |
 | ![GPU](https://img.shields.io/badge/GPU-RTX%205090-blueviolet?style=flat-square) | 사용 GPU |
-| ![VRAM](https://img.shields.io/badge/VRAM-11%2F24GB-ff69b4?style=flat-square) | VRAM 사용 현황 |
+| ![VRAM](https://img.shields.io/badge/VRAM-23.1%2F24GB-ff69b4?style=flat-square) | VRAM 사용 현황 |
 | ![Tokens](https://img.shields.io/badge/Tokens-600M%2B-9cf?style=flat-square) | 처리된 토큰 |
 | ![Model](https://img.shields.io/badge/Model-1.1B%20Parameters-informational?style=flat-square) | 모델 크기 |
 
