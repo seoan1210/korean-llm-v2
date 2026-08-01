@@ -53,13 +53,15 @@ class DatasetManager:
             "name": "squarelike/OpenOrca-gugugo-ko",
             "config": None,
             "split": "train",
-            "text_key": "text"
+            # OpenOrca 구조에 맞춰 질문/응답 필드 지정
+            "text_keys": ["question", "response"], 
+            "system_key": "system_prompt" # 옵션
         },
         {
             "name": "beomi/KoAlpaca-v1.1a",
             "config": None,
             "split": "train",
-            "text_keys": ["instruction", "output"]  # 여러 필드 조합
+            "text_keys": ["instruction", "output"]
         }
     ]
     
@@ -248,13 +250,24 @@ class LocalKoreanDataset(Dataset):
         for item in ds:
             text = None
             
-            # 다양한 필드명 시도
+            # 1. 단일 text 필드가 있는 경우
             if "text" in item and item["text"]:
                 text = item["text"]
+            
+            # 2. OpenOrca 데이터셋 (system_prompt, question, response)
+            elif "question" in item and "response" in item:
+                system_str = f"### 시스템: {item['system_prompt']}\n" if item.get("system_prompt") else ""
+                text = f"{system_str}### 지시: {item['question']}\n### 응답: {item['response']}"
+            
+            # 3. KoAlpaca 등 (instruction, output)
             elif "instruction" in item and "output" in item:
                 text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
+            
+            # 4. 기타 (question, answer)
             elif "question" in item and "answer" in item:
                 text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
+            
+            # 5. 기타 (prompt, response)
             elif "prompt" in item and "response" in item:
                 text = f"### 프롬프트: {item['prompt']}\n### 응답: {item['response']}"
             
