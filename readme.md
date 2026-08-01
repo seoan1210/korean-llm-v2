@@ -369,19 +369,15 @@ DataLoader
   - NVIDIA A100 (80GB)
 
 ✅ 검증된 노트북/모바일 GPU:
-  - Lenovo Legion 7 Pro (RTX 5090 24GB GDDR7) ⭐ 실제 검증
-  - ASUS ROG Strix G16 / SCAR (RTX 4090 Laptop)
-  - MSI Raider GE78 / Stealth (RTX 4080 Laptop, 16GB) - 배치 크기 1, 시퀀스 128
-  - Alienware x16 / Razer Blade 18 (RTX 4070 Ti Laptop) - 추가 조정 필요
+  - RTX 5090 24GB GDDR7 ⭐ 실제 검증
+  - RTX PRO 5000
 
 ⚠️ 제한적 지원:
-  - NVIDIA RTX 4080 Super (16GB) - 배치 크기 1
-  - NVIDIA RTX 4070 Ti (12GB) - 배치 크기 1, 시퀀스 128
   - NVIDIA RTX 3090 (24GB) - 속도 느림
-  - 모바일 40/50 시리즈: 16GB 이상 모델 선호
+  - 모바일 시리즈: 24GB 이상 모델 선호
 
 ❌ 미지원:
-  - GTX 1660 이하 (메모리 부족)
+  - VRAM 24GB 이하 (메모리 부족)
   - 통합 그래픽 (Apple Silicon은 제한적)
   - 구 세대 GPU (<5GB VRAM)
   - VRAM 1GB 이하 노트북 컴퓨터: 학습이 매우 어렵습니다
@@ -400,10 +396,10 @@ CPU:
   속도: DDR5 권장 (DDR4도 가능)
 
 스토리지:
-  OS: 100GB 여유
+  OS: 1TB 여유
   데이터셋: 50GB
-  체크포인트: 10GB
-  전체: 160GB+ 권장 (NVMe SSD 필수)
+  체크포인트: 1000GB+ (총 50개 체크포인트 저장)
+  전체: 2TB+ 권장 (NVMe SSD 필수)
 ```
 
 #### 네트워크
