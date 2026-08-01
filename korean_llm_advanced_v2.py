@@ -14,13 +14,6 @@ import json
 from pathlib import Path
 import hashlib
 import time
-from huggingface_hub import login
-
-# ==========================================
-# 허깅페이스 설정
-# ==========================================
-
-login(token="your_huggingface_token_here")
 
 # ==========================================
 # 로깅 설정
