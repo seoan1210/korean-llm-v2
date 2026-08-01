@@ -13,7 +13,7 @@
 LLaMA 기반의 1.3B 파라미터 모델을 순수 한국어 데이터로 학습하고 있습니다. 
 **모든 사람**이 자신의 GPU로 이 프로젝트를 사용할 수 있도록 설계되었습니다. 🎯
 
-**Current Status**: 🚀 10100 Steps | Loss: 1.45~1.70 (Stable) | Training Ongoing
+**Current Status**: 🚀 10000 Steps | Loss: 1.45~1.70 (Stable) | Training Ongoing
 
 ---
 

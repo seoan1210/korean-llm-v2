@@ -860,7 +860,7 @@ if __name__ == "__main__":
         max_steps=50000,
         warmup_steps=200,
         learning_rate=5e-5,
-        eval_interval=100,
+        eval_interval=1000,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
         download_datasets=False,  # True로 바꾸면 강제로 다시 다운로드
         samples_per_dataset=None
