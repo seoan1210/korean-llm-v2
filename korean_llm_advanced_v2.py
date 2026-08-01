@@ -49,6 +49,7 @@ class DatasetManager:
             "split": "train",
             "text_key": "text"
         },
+
         {
             "name": "squarelike/OpenOrca-gugugo-ko",
             "manual": True,
@@ -57,6 +58,7 @@ class DatasetManager:
                 "ko-openorca_3_5M-GPT3.5-Augmented_split_0_to_2000.json"
             ]
         },
+
         {
             "name": "beomi/KoAlpaca-v1.1a",
             "config": None,
@@ -75,6 +77,11 @@ class DatasetManager:
     ):
 
         self.cache_dir = cache_dir
+        self.cache_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
         self.manifest = self._load_manifest()
 
         ensure_datasets_dir()
@@ -114,15 +121,46 @@ class DatasetManager:
 
 
 
-    def _get_dataset_hash(self, config):
+    def _get_dataset_hash(
+        self,
+        config
+    ):
+
+        raw = json.dumps(
+            config,
+            sort_keys=True,
+            ensure_ascii=False
+        )
 
         return hashlib.md5(
-            json.dumps(
-                config,
-                sort_keys=True,
-                ensure_ascii=False
-            ).encode()
+            raw.encode()
         ).hexdigest()[:8]
+
+
+
+    def _check_cache(
+        self,
+        dataset_hash
+    ):
+
+        if dataset_hash not in self.manifest:
+            return None
+
+
+        path = Path(
+            self.manifest[dataset_hash]["path"]
+        )
+
+
+        parquet = path / "data.parquet"
+
+
+        if parquet.exists():
+
+            return str(path)
+
+
+        return None
 
 
 
@@ -132,58 +170,53 @@ class DatasetManager:
     ):
 
         """
-        OpenOrca 직접 다운로드 방식
-        HF builder 우회
+        OpenOrca 수동 다운로드
+        HF Dataset builder 오류 우회
         """
 
-        dataset_hash = self._get_dataset_hash(config)
+        dataset_hash = self._get_dataset_hash(
+            config
+        )
 
-        save_dir = (
-            self.cache_dir /
+
+        cached = self._check_cache(
             dataset_hash
         )
 
-        save_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
 
-
-        parquet_file = (
-            save_dir /
-            "data.parquet"
-        )
-
-
-        if parquet_file.exists():
+        if cached:
 
             logger.info(
-                "✅ OpenOrca cache exists"
+                "✅ Cached OpenOrca"
             )
 
-            return str(save_dir)
+            return cached
 
 
 
         logger.info(
-            "📥 Downloading OpenOrca manually..."
+            "📥 Downloading OpenOrca manually"
         )
 
 
         from huggingface_hub import hf_hub_download
+        from datasets import Dataset
 
 
-        rows = []
+
+        all_rows = []
+
 
 
         for filename in config["files"]:
 
+
             logger.info(
-                f"⬇ Loading {filename}"
+                f"⬇ {filename}"
             )
 
 
-            path = hf_hub_download(
+            json_path = hf_hub_download(
                 repo_id=
                 "squarelike/OpenOrca-gugugo-ko",
 
@@ -197,13 +230,15 @@ class DatasetManager:
             )
 
 
+
             logger.info(
-                "📖 Reading json..."
+                "📖 Parsing json"
             )
 
 
+
             with open(
-                path,
+                json_path,
                 "r",
                 encoding="utf-8"
             ) as f:
@@ -217,31 +252,50 @@ class DatasetManager:
             )
 
 
-            rows.extend(data)
+            all_rows.extend(
+                data
+            )
 
 
 
         logger.info(
-            f"Total samples {len(rows):,}"
+            f"Total OpenOrca samples: {len(all_rows):,}"
         )
 
-
-
-        from datasets import Dataset
 
 
         ds = Dataset.from_list(
-            rows
+            all_rows
+        )
+
+
+        save_dir = (
+            self.cache_dir /
+            dataset_hash
+        )
+
+
+        save_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+
+
+        parquet = (
+            save_dir /
+            "data.parquet"
         )
 
 
         logger.info(
-            "💾 Saving parquet..."
+            "💾 Saving parquet"
         )
 
 
         ds.to_parquet(
-            str(parquet_file)
+            str(parquet),
+            compression="snappy"
         )
 
 
@@ -263,8 +317,8 @@ class DatasetManager:
         self._save_manifest()
 
 
-        return str(save_dir)
 
+        return str(save_dir)
 
 
 
@@ -275,28 +329,27 @@ class DatasetManager:
         force=False
     ):
 
+
         dataset_hash = self._get_dataset_hash(
             config
         )
 
 
-        if (
-            dataset_hash in self.manifest
-            and not force
-        ):
+        if not force:
 
-            path = self.manifest[
+
+            cached = self._check_cache(
                 dataset_hash
-            ].get("path")
+            )
 
 
-            if path and Path(path).exists():
+            if cached:
 
                 logger.info(
                     f"✅ Cached {config['name']}"
                 )
 
-                return path
+                return cached
 
 
 
@@ -311,6 +364,7 @@ class DatasetManager:
         logger.info(
             f"📥 Downloading {config['name']}"
         )
+
 
 
         kwargs = {
@@ -341,10 +395,21 @@ class DatasetManager:
         )
 
 
+
+        if isinstance(
+            ds,
+            DatasetDict
+        ):
+
+            ds = ds["train"]
+
+
+
         save_dir = (
             self.cache_dir /
             dataset_hash
         )
+
 
         save_dir.mkdir(
             parents=True,
@@ -352,17 +417,22 @@ class DatasetManager:
         )
 
 
-        if isinstance(ds, DatasetDict):
 
-            ds = ds["train"]
+        parquet = (
+            save_dir /
+            "data.parquet"
+        )
 
+
+
+        logger.info(
+            "💾 Saving parquet"
+        )
 
 
         ds.to_parquet(
-            str(
-                save_dir /
-                "data.parquet"
-            )
+            str(parquet),
+            compression="snappy"
         )
 
 
@@ -381,6 +451,7 @@ class DatasetManager:
         }
 
 
+
         self._save_manifest()
 
 
@@ -390,16 +461,18 @@ class DatasetManager:
 
 
 
-
     def get_or_download_all(
         self,
         force=False
     ):
 
+
         paths = []
 
 
+
         for config in self.DATASETS_CONFIG:
+
 
             path = self.download_dataset(
                 config,
@@ -409,7 +482,9 @@ class DatasetManager:
 
             if path:
 
-                paths.append(path)
+                paths.append(
+                    path
+                )
 
 
 
