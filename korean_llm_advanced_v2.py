@@ -451,7 +451,7 @@ class KoreanLLM(nn.Module):
         self,
         vocab_size: int = 128256,
         pad_token_id: int = 128004,
-        dim: int = 1900,
+        dim: int = 1920,
         n_layers: int = 20,
         n_heads: int = 10,
         max_seq_len: int = 2048
@@ -749,7 +749,7 @@ def main(config: TrainingConfig = TrainingConfig()):
     model = KoreanLLM(
         vocab_size=len(tokenizer),
         pad_token_id=tokenizer.pad_token_id,
-        dim = 1900,
+        dim = 1920,
         n_layers = 20,
         n_heads = 10,
         max_seq_len=config.max_seq_len
