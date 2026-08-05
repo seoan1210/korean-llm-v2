@@ -17,12 +17,54 @@ import hashlib
 import time
 import pandas as pd
 from tqdm import tqdm
+import threading
+import queue
+from datetime import datetime
+import matplotlib
+matplotlib.use('TkAgg')  # GUI 백엔드
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import tkinter as tk
+from tkinter import scrolledtext, Entry, Button, Frame, Label, StringVar
+import copy
 
 # ==========================================
-# 로깅 설정
+# 로깅 설정 (파일 저장 추가)
 # ==========================================
-logging.basicConfig(level=logging.INFO)
+LOG_DIR = Path("./logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "training.log", encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Loss 히스토리 저장용
+LOSS_HISTORY_FILE = LOG_DIR / "loss_history.json"
+loss_history = []  # [{"step": int, "loss": float, "lr": float, "time": str}, ...]
+
+def save_loss_history():
+    try:
+        with open(LOSS_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(loss_history, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Loss history save failed: {e}")
+
+def load_loss_history():
+    global loss_history
+    if LOSS_HISTORY_FILE.exists():
+        try:
+            with open(LOSS_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                loss_history = json.load(f)
+            logger.info(f"✅ Loaded {len(loss_history)} previous loss records")
+        except Exception as e:
+            logger.warning(f"Failed to load loss history: {e}")
+            loss_history = []
 
 # ==========================================
 # 데이터셋 기본 설정
@@ -696,6 +738,187 @@ def find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]
     return latest_path
 
 # ==========================================
+# GUI: Loss 그래프 + 채팅 창
+# ==========================================
+
+class TrainingMonitorGUI:
+    """학습 모니터링 창 (Loss 그래프 + 현재 체크포인트 채팅)"""
+    
+    def __init__(self, tokenizer, device, model_config: dict):
+        self.tokenizer = tokenizer
+        self.device = device
+        self.model_config = model_config
+        self.chat_model = None  # 채팅용 별도 모델 (최신 체크포인트 로드)
+        self.current_ckpt_path = None
+        self.running = True
+        
+        # 메시지 큐 (메인 스레드 → GUI)
+        self.msg_queue = queue.Queue()
+        
+        self.root = tk.Tk()
+        self.root.title("KoreanLLM Training Monitor 📊 + Chat")
+        self.root.geometry("1200x700")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # 왼쪽: 그래프
+        left_frame = Frame(self.root, width=600)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        Label(left_frame, text="📉 Loss Curve (실시간)", font=("Arial", 12, "bold")).pack()
+        
+        self.fig, self.ax = plt.subplots(figsize=(6, 5), dpi=100)
+        self.ax.set_xlabel("Step")
+        self.ax.set_ylabel("Loss")
+        self.ax.set_title("Training Loss")
+        self.ax.grid(True, alpha=0.3)
+        self.line, = self.ax.plot([], [], 'b-', linewidth=1.5, label="Loss")
+        self.ax.legend()
+        
+        self.canvas = FigureCanvasTkAgg(self.fig, master=left_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # 오른쪽: 채팅
+        right_frame = Frame(self.root, width=550)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.ckpt_label = Label(right_frame, text="현재 체크포인트: (아직 없음)", font=("Arial", 10), fg="blue")
+        self.ckpt_label.pack(pady=5)
+        
+        Label(right_frame, text="💬 모델과 대화하기", font=("Arial", 12, "bold")).pack()
+        
+        self.chat_display = scrolledtext.ScrolledText(right_frame, height=25, width=60, state='disabled', wrap=tk.WORD)
+        self.chat_display.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        input_frame = Frame(right_frame)
+        input_frame.pack(fill=tk.X, pady=5)
+        
+        self.user_input = Entry(input_frame, font=("Arial", 11))
+        self.user_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.user_input.bind("<Return>", self.send_message)
+        
+        send_btn = Button(input_frame, text="전송", command=self.send_message, width=8)
+        send_btn.pack(side=tk.RIGHT)
+        
+        refresh_btn = Button(right_frame, text="🔄 최신 체크포인트 로드", command=self.load_latest_checkpoint)
+        refresh_btn.pack(pady=5)
+        
+        # 주기적 업데이트
+        self.root.after(1000, self.update_gui)
+    
+    def on_close(self):
+        self.running = False
+        self.root.destroy()
+    
+    def update_gui(self):
+        """큐에서 메시지 받아서 처리 + 그래프 업데이트"""
+        try:
+            while True:
+                msg = self.msg_queue.get_nowait()
+                if msg["type"] == "loss":
+                    self._update_plot()
+                elif msg["type"] == "ckpt":
+                    self.current_ckpt_path = msg["path"]
+                    self.ckpt_label.config(text=f"현재 체크포인트: {Path(msg['path']).name}")
+                elif msg["type"] == "log":
+                    self._append_chat(f"[시스템] {msg['text']}\n", "system")
+        except queue.Empty:
+            pass
+        
+        if self.running:
+            self.root.after(1000, self.update_gui)
+    
+    def _update_plot(self):
+        if not loss_history:
+            return
+        steps = [h["step"] for h in loss_history]
+        losses = [h["loss"] for h in loss_history]
+        self.line.set_data(steps, losses)
+        self.ax.relim()
+        self.ax.autoscale_view()
+        self.canvas.draw_idle()
+    
+    def _append_chat(self, text: str, tag: str = "user"):
+        self.chat_display.config(state='normal')
+        self.chat_display.insert(tk.END, text)
+        self.chat_display.config(state='disabled')
+        self.chat_display.see(tk.END)
+    
+    def load_latest_checkpoint(self):
+        """최신 체크포인트를 채팅용 모델에 로드"""
+        ckpt = find_latest_checkpoint()
+        if not ckpt:
+            self._append_chat("[시스템] 체크포인트가 아직 없습니다.\n", "system")
+            return
+        
+        try:
+            self._append_chat(f"[시스템] 체크포인트 로딩 중: {Path(ckpt).name} ...\n", "system")
+            self.root.update()
+            
+            # 채팅용 모델 새로 생성 (학습 모델과 분리)
+            if self.chat_model is None:
+                self.chat_model = KoreanLLM(**self.model_config).to(self.device)
+            
+            checkpoint = torch.load(ckpt, map_location=self.device)
+            self.chat_model.load_state_dict(checkpoint['model_state_dict'])
+            self.chat_model.eval()
+            
+            self.current_ckpt_path = ckpt
+            self.ckpt_label.config(text=f"현재 체크포인트: {Path(ckpt).name}")
+            self._append_chat(f"[시스템] 로드 완료! 이제 대화할 수 있어요.\n", "system")
+        except Exception as e:
+            self._append_chat(f"[시스템] 로드 실패: {e}\n", "system")
+    
+    def send_message(self, event=None):
+        prompt = self.user_input.get().strip()
+        if not prompt:
+            return
+        
+        self.user_input.delete(0, tk.END)
+        self._append_chat(f"나: {prompt}\n", "user")
+        
+        if self.chat_model is None:
+            self._append_chat("[시스템] 먼저 '최신 체크포인트 로드' 버튼을 눌러주세요.\n", "system")
+            return
+        
+        try:
+            self._append_chat("모델: 생각 중...\n", "model")
+            self.root.update()
+            
+            response = generate(
+                self.chat_model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=80,
+                temperature=0.7,
+                top_p=0.95,
+                device=self.device
+            )
+            
+            # 마지막 "생각 중..." 줄 지우고 실제 응답 넣기
+            self.chat_display.config(state='normal')
+            self.chat_display.delete("end-2l", "end-1l")
+            self.chat_display.config(state='disabled')
+            
+            self._append_chat(f"모델: {response}\n\n", "model")
+        except Exception as e:
+            self._append_chat(f"[시스템] 생성 오류: {e}\n", "system")
+    
+    def notify_loss(self):
+        self.msg_queue.put({"type": "loss"})
+    
+    def notify_checkpoint(self, path: str):
+        self.msg_queue.put({"type": "ckpt", "path": path})
+    
+    def notify_log(self, text: str):
+        self.msg_queue.put({"type": "log", "text": text})
+    
+    def run(self):
+        self.root.mainloop()
+
+# 전역 GUI 인스턴스
+gui_monitor: Optional[TrainingMonitorGUI] = None
+
+# ==========================================
 # 5. 메인 학습 루프
 # ==========================================
 
@@ -725,12 +948,16 @@ def setup_distributed(rank: int = 0, world_size: int = 1):
         torch.cuda.manual_seed(42 + rank)
 
 def main(config: TrainingConfig = TrainingConfig()):
+    global gui_monitor
+    
     setup_distributed()
     ensure_datasets_dir()
+    load_loss_history()  # 이전 loss 기록 불러오기
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     logger.info(f"📂 Datasets directory: {DATASETS_DIR.absolute()}")
+    logger.info(f"📂 Logs directory: {LOG_DIR.absolute()}")
     
     # ============================================
     # 1. 토크나이저 로드
@@ -783,18 +1010,32 @@ def main(config: TrainingConfig = TrainingConfig()):
     # 3. 모델 생성
     # ============================================
     logger.info("Creating model...")
-    model = KoreanLLM(
+    model_config = dict(
         vocab_size=len(tokenizer),
         pad_token_id=tokenizer.pad_token_id,
         dim=1920,
         n_layers=20,
         n_heads=10,
         max_seq_len=config.max_seq_len
-    ).to(device)
+    )
+    model = KoreanLLM(**model_config).to(device)
     
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model: {total_params / 1e6:.1f}M total params, {trainable_params / 1e6:.1f}M trainable")
+    
+    # ============================================
+    # GUI 시작 (별도 스레드)
+    # ============================================
+    def start_gui():
+        global gui_monitor
+        gui_monitor = TrainingMonitorGUI(tokenizer, device, model_config)
+        gui_monitor.run()
+    
+    gui_thread = threading.Thread(target=start_gui, daemon=True)
+    gui_thread.start()
+    time.sleep(1.5)  # GUI가 뜰 시간 줌
+    logger.info("🖥️  Monitoring GUI started (Loss graph + Chat)")
     
     # ============================================
     # 4. 옵티마이저와 스케줄러
@@ -832,6 +1073,8 @@ def main(config: TrainingConfig = TrainingConfig()):
                 scheduler,
                 device
             )
+            if gui_monitor:
+                gui_monitor.notify_checkpoint(checkpoint_path)
     
     # ============================================
     # 6. 학습 루프
@@ -904,7 +1147,22 @@ def main(config: TrainingConfig = TrainingConfig()):
                     avg_loss = running_loss / config.accumulation_steps  # ✅ 정확한 평균
                     lr = scheduler.get_last_lr()[0]
                     
-                    print(f"\n[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}")
+                    log_msg = f"[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}"
+                    print(f"\n{log_msg}")
+                    logger.info(log_msg)
+                    
+                    # Loss 히스토리 저장
+                    loss_history.append({
+                        "step": actual_step,
+                        "loss": float(avg_loss),
+                        "lr": float(lr),
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    save_loss_history()
+                    
+                    # GUI에 알림
+                    if gui_monitor:
+                        gui_monitor.notify_loss()
                     
                     running_loss = 0.0
                     
@@ -926,6 +1184,10 @@ def main(config: TrainingConfig = TrainingConfig()):
                         # 체크포인트 저장
                         checkpoint_path = f"checkpoints/korean_llm_{actual_step:05d}.pth"
                         save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+                        
+                        if gui_monitor:
+                            gui_monitor.notify_checkpoint(checkpoint_path)
+                            gui_monitor.notify_log(f"체크포인트 저장됨: {Path(checkpoint_path).name}")
                 
                 step += 1
             
@@ -937,11 +1199,20 @@ def main(config: TrainingConfig = TrainingConfig()):
         actual_step = (step // config.accumulation_steps) + start_step
         checkpoint_path = f"checkpoints/korean_llm_interrupted_{actual_step:05d}.pth"
         save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
+        if gui_monitor:
+            gui_monitor.notify_checkpoint(checkpoint_path)
     
     except Exception as e:
         logger.error(f"Training error: {e}", exc_info=True)
     
     logger.info("🎉 Training completed!")
+    save_loss_history()
+    
+    # GUI가 계속 열려있도록 대기
+    if gui_monitor and gui_monitor.running:
+        logger.info("GUI가 열려 있습니다. 창을 닫으면 종료됩니다.")
+        while gui_monitor.running:
+            time.sleep(1)
 
 if __name__ == "__main__":
     config = TrainingConfig(
