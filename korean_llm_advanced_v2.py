@@ -605,7 +605,8 @@ def generate(
     max_tokens: int = 100,
     temperature: float = 0.7,
     top_k: int = 40,
-    top_p: float = 0.95,  # ✅ BUG FIX #5: nucleus sampling 추가
+    top_p: float = 0.95,
+    repetition_penalty: float = 1.2,  # 1.0보다 크면 반복을 억제합니다.
     device: torch.device = None
 ) -> str:
     if device is None:
@@ -627,6 +628,15 @@ def generate(
         
         next_logits = logits[:, -1, :] / temperature
         
+        # --- 반복 페널티 적용 시작 ---
+        if repetition_penalty != 1.0:
+            for token_id in set(output_tokens[0].tolist()):
+                if next_logits[0, token_id] < 0:
+                    next_logits[0, token_id] *= repetition_penalty
+                else:
+                    next_logits[0, token_id] /= repetition_penalty
+        # --- 반복 페널티 적용 끝 ---
+        
         # top_k filtering
         if top_k > 0:
             indices_to_remove = next_logits < torch.topk(next_logits, min(top_k, next_logits.size(-1)))[0][..., -1, None]
@@ -634,29 +644,24 @@ def generate(
         
         probs = F.softmax(next_logits, dim=-1)
         
-        # ✅ BUG FIX #5: top_p (nucleus sampling) 구현
+        # top_p sampling
         if top_p < 1.0:
             sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
             cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
-            
             sorted_indices_to_remove = cumsum_probs > top_p
-            sorted_indices_to_remove[..., 0] = False  # 최소 1개는 유지
-            
+            sorted_indices_to_remove[..., 0] = False
             indices_to_remove = torch.zeros_like(probs, dtype=torch.bool)
             indices_to_remove.scatter_(dim=-1, index=sorted_indices, src=sorted_indices_to_remove)
             probs[indices_to_remove] = 0.0
             probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-10)
         
         next_token = torch.multinomial(probs, num_samples=1)
-        
         output_tokens = torch.cat([output_tokens, next_token], dim=1)
         
-        # ✅ BUG FIX #7: EOS 토큰 정확하게 인식
         if next_token.item() == tokenizer.eos_token_id:
             break
         
         if output_tokens.shape[1] > 512:
-            logger.warning("Generated sequence too long, truncating")
             break
     
     generated_text = tokenizer.decode(output_tokens[0], skip_special_tokens=True)
