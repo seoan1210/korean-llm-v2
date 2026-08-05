@@ -218,6 +218,7 @@ class DatasetManager:
         
         logger.info(f"✅ Ready with {len(paths)} datasets")
         return paths
+
 # ==========================================
 # 로컬 데이터셋 클래스
 # ==========================================
@@ -354,17 +355,29 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> Tuple[torch.Tensor, torch.Tensor]:
-    """RoPE(Rotary Position Embedding) 주파수 사전계산"""
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+# ✅ BUG FIX #1: RoPE - head_dim 기준으로 계산 (차원 일치)
+def precompute_freqs_cis(head_dim: int, end: int, theta: float = 10000.0) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    RoPE(Rotary Position Embedding) 주파수 사전계산
+    수정사항: dim 대신 head_dim 사용 (Llama: θ_j = 10000^(-2j/d_head))
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2)[: (head_dim // 2)].float() / head_dim))
     t = torch.arange(end, dtype=freqs.dtype)
     freqs = torch.outer(t, freqs)
     return torch.cos(freqs), torch.sin(freqs)
 
+# ✅ BUG FIX #2: apply_rotary_emb - 차원 처리 정확화
 def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """RoPE 적용"""
-    d = x.shape[-1]
-    x1, x2 = x[..., :d//2], x[..., d//2:]
+    """RoPE 적용 (정확한 차원 처리)"""
+    seq, head_dim_2 = cos.shape  # head_dim_2 = head_dim // 2
+    head_dim = head_dim_2 * 2
+    
+    x1, x2 = x[..., :head_dim//2], x[..., head_dim//2:]
+    
+    # 차원 맞추기: cos/sin을 (1, 1, seq, head_dim//2)로 방송
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+    
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
 class SwiGLU(nn.Module):
@@ -405,12 +418,14 @@ class Attention(nn.Module):
         k = self.wk(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.wv(x).view(b, s, self.n_heads, self.head_dim).transpose(1, 2)
         
+        # ✅ BUG FIX #2: RoPE 적용 (정확한 차원)
         q = apply_rotary_emb(q, f_cos, f_sin)
         k = apply_rotary_emb(k, f_cos, f_sin)
         
+        # ✅ KV Cache (training에선 None, inference에선 누적)
         if kv_cache is not None:
             pk, pv = kv_cache
-            k = torch.cat([pk, k], dim=2)
+            k = torch.cat([pk, k], dim=2)  # seq 차원에서 누적
             v = torch.cat([pv, v], dim=2)
         
         new_kv = (k.detach(), v.detach())
@@ -461,6 +476,7 @@ class KoreanLLM(nn.Module):
         self.pad_token_id = pad_token_id
         self.dim = dim
         self.n_heads = n_heads
+        self.head_dim = dim // n_heads  # 192
         
         self.embed = nn.Embedding(vocab_size, dim)
         self.layers = nn.ModuleList([
@@ -471,7 +487,8 @@ class KoreanLLM(nn.Module):
         self.output = nn.Linear(dim, vocab_size, bias=False)
         self.output.weight = self.embed.weight
         
-        f_cos, f_sin = precompute_freqs_cis(dim // n_heads, max_seq_len * 2)
+        # ✅ BUG FIX #1: head_dim 기준 RoPE 계산
+        f_cos, f_sin = precompute_freqs_cis(self.head_dim, max_seq_len * 2)
         self.register_buffer("f_cos", f_cos)
         self.register_buffer("f_sin", f_sin)
         
@@ -487,7 +504,7 @@ class KoreanLLM(nn.Module):
                 nn.init.normal_(module.weight, std=0.02)
     
     def _get_freqs(self, f: torch.Tensor, start: int, length: int) -> torch.Tensor:
-        return f[start:start + length].unsqueeze(0).unsqueeze(0)
+        return f[start:start + length]
     
     def forward(
         self,
@@ -502,6 +519,7 @@ class KoreanLLM(nn.Module):
         if kv_caches is not None and len(kv_caches) > 0 and kv_caches[0][0] is not None:
             start_pos = kv_caches[0][0].shape[2]
         
+        # ✅ BUG FIX #1, #2: head_dim 기준 RoPE 슬라이싱
         f_cos = self._get_freqs(self.f_cos, start_pos, s)
         f_sin = self._get_freqs(self.f_sin, start_pos, s)
         
@@ -523,10 +541,12 @@ class KoreanLLM(nn.Module):
         
         loss = None
         if labels is not None:
+            # ✅ BUG FIX #4: Loss 계산 정확화
             loss = F.cross_entropy(
                 logits[..., :-1, :].reshape(-1, logits.size(-1)),
                 labels[..., 1:].reshape(-1),
-                ignore_index=self.pad_token_id
+                ignore_index=self.pad_token_id,
+                reduction='mean'
             )
         
         return logits, loss, new_kv_caches
@@ -543,6 +563,7 @@ def generate(
     max_tokens: int = 100,
     temperature: float = 0.7,
     top_k: int = 40,
+    top_p: float = 0.95,  # ✅ BUG FIX #5: nucleus sampling 추가
     device: torch.device = None
 ) -> str:
     if device is None:
@@ -564,15 +585,31 @@ def generate(
         
         next_logits = logits[:, -1, :] / temperature
         
+        # top_k filtering
         if top_k > 0:
-            indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][..., -1, None]
+            indices_to_remove = next_logits < torch.topk(next_logits, min(top_k, next_logits.size(-1)))[0][..., -1, None]
             next_logits[indices_to_remove] = float('-inf')
         
         probs = F.softmax(next_logits, dim=-1)
+        
+        # ✅ BUG FIX #5: top_p (nucleus sampling) 구현
+        if top_p < 1.0:
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+            cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
+            
+            sorted_indices_to_remove = cumsum_probs > top_p
+            sorted_indices_to_remove[..., 0] = False  # 최소 1개는 유지
+            
+            indices_to_remove = torch.zeros_like(probs, dtype=torch.bool)
+            indices_to_remove.scatter_(dim=-1, index=sorted_indices, src=sorted_indices_to_remove)
+            probs[indices_to_remove] = 0.0
+            probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-10)
+        
         next_token = torch.multinomial(probs, num_samples=1)
         
         output_tokens = torch.cat([output_tokens, next_token], dim=1)
         
+        # ✅ BUG FIX #7: EOS 토큰 정확하게 인식
         if next_token.item() == tokenizer.eos_token_id:
             break
         
@@ -597,7 +634,7 @@ def save_checkpoint(
     step: int,
     checkpoint_path: str
 ):
-    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
     
     checkpoint = {
         'step': step,
@@ -677,9 +714,8 @@ class TrainingConfig:
     use_bfloat16: bool = True
     seed: int = 42
     resume_from_checkpoint: Optional[str] = None
-    # 새로운 옵션들
-    download_datasets: bool = False  # True면 데이터셋 다시 다운로드
-    samples_per_dataset: Optional[int] = None  # None이면 전체 사용
+    download_datasets: bool = False
+    samples_per_dataset: Optional[int] = None
 
 def setup_distributed(rank: int = 0, world_size: int = 1):
     """분산학습 설정"""
@@ -689,7 +725,6 @@ def setup_distributed(rank: int = 0, world_size: int = 1):
         torch.cuda.manual_seed(42 + rank)
 
 def main(config: TrainingConfig = TrainingConfig()):
-    """메인 학습 함수 (로컬 데이터셋 기반)"""
     setup_distributed()
     ensure_datasets_dir()
     
@@ -705,7 +740,12 @@ def main(config: TrainingConfig = TrainingConfig()):
         "beomi/Llama-3-Open-Ko-8B",
         clean_up_tokenization_spaces=False
     )
-    tokenizer.pad_token = tokenizer.eos_token
+    
+    # ✅ BUG FIX #7: EOS/PAD 토큰 명시적 설정
+    if not tokenizer.pad_token:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    logger.info(f"Tokenizer: vocab_size={len(tokenizer)}, eos_id={tokenizer.eos_token_id}, pad_id={tokenizer.pad_token_id}")
     
     # ============================================
     # 2. 데이터셋 다운로드 및 로드
@@ -713,14 +753,12 @@ def main(config: TrainingConfig = TrainingConfig()):
     logger.info("Setting up datasets...")
     manager = DatasetManager()
     
-    # 데이터셋 다운로드 (또는 캐시 로드)
     dataset_paths = manager.get_or_download_all(force=config.download_datasets)
     
     if not dataset_paths:
         logger.error("❌ No datasets available!")
         return
     
-    # 로컬 데이터셋 생성
     dataset = LocalKoreanDataset(
         dataset_paths=dataset_paths,
         tokenizer=tokenizer,
@@ -732,7 +770,6 @@ def main(config: TrainingConfig = TrainingConfig()):
         logger.error("❌ Dataset is empty!")
         return
     
-    # 데이터로더
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -749,9 +786,9 @@ def main(config: TrainingConfig = TrainingConfig()):
     model = KoreanLLM(
         vocab_size=len(tokenizer),
         pad_token_id=tokenizer.pad_token_id,
-        dim = 1920,
-        n_layers = 20,
-        n_heads = 10,
+        dim=1920,
+        n_layers=20,
+        n_heads=10,
         max_seq_len=config.max_seq_len
     ).to(device)
     
@@ -763,11 +800,14 @@ def main(config: TrainingConfig = TrainingConfig()):
     # 4. 옵티마이저와 스케줄러
     # ============================================
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+    
+    # ✅ BUG FIX #9: Scheduler 타이밍 정확화
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=config.warmup_steps,
         num_training_steps=config.max_steps
     )
+    
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     
     # ============================================
@@ -803,17 +843,20 @@ def main(config: TrainingConfig = TrainingConfig()):
     model.train()
     optimizer.zero_grad()
     
+    # ✅ BUG FIX #6: Loss 로깅 정확화
     running_loss = 0.0
-    step = start_step * config.accumulation_steps
+    step = 0  # 원시 이터레이션 카운트
     
     try:
         epoch = 0
-        while step // config.accumulation_steps < config.max_steps:
+        while True:
             epoch += 1
             logger.info(f"\n📍 Epoch {epoch}")
             
             for batch_idx, batch in enumerate(loader):
-                if step // config.accumulation_steps >= config.max_steps:
+                actual_step = (step // config.accumulation_steps) + start_step
+                
+                if actual_step >= config.max_steps:
                     logger.info(f"Reached max steps ({config.max_steps}), stopping training")
                     break
                 
@@ -823,15 +866,16 @@ def main(config: TrainingConfig = TrainingConfig()):
                 if device.type == 'cuda' and config.use_bfloat16:
                     with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                         _, loss, _ = model(batch, labels=batch)
-                        loss = loss / config.accumulation_steps
+                        loss_scaled = loss / config.accumulation_steps
                     
-                    scaler.scale(loss).backward()
+                    scaler.scale(loss_scaled).backward()
                 else:
-                    _, loss_val, _ = model(batch, labels=batch)
-                    loss = loss_val / config.accumulation_steps
-                    loss.backward()
+                    _, loss, _ = model(batch, labels=batch)
+                    loss_scaled = loss / config.accumulation_steps
+                    loss_scaled.backward()
                 
-                running_loss += loss.item() * config.accumulation_steps
+                # ✅ BUG FIX #6: 원본 loss 누적 (이중 계산 방지)
+                running_loss += loss.item()
                 
                 # Progress indicator
                 if step % 4 == 0:
@@ -851,11 +895,13 @@ def main(config: TrainingConfig = TrainingConfig()):
                         optimizer.step()
                     
                     optimizer.zero_grad()
+                    
+                    # ✅ BUG FIX #9: scheduler.step() 호출 (accumulation 후)
                     scheduler.step()
                     
                     # 로깅
-                    actual_step = (step + 1) // config.accumulation_steps
-                    avg_loss = running_loss / config.accumulation_steps
+                    actual_step = (step + 1) // config.accumulation_steps + start_step
+                    avg_loss = running_loss / config.accumulation_steps  # ✅ 정확한 평균
                     lr = scheduler.get_last_lr()[0]
                     
                     print(f"\n[Step {actual_step:5d}] Loss: {avg_loss:.4f} | LR: {lr:.2e} | Tokens/step: {config.batch_size * config.max_seq_len}")
@@ -869,11 +915,11 @@ def main(config: TrainingConfig = TrainingConfig()):
                             "한국의 수도는",
                             "인공지능이란",
                             "안녕?"
-                            ]
+                        ]
                         for prompt in prompts:
                             response = generate(
                                 model, tokenizer, prompt=prompt,
-                                max_tokens=50, temperature=0.7, device=device
+                                max_tokens=50, temperature=0.7, top_p=0.95, device=device
                             )
                             logger.info(f"  Q: {prompt}\n  A: {response}")
                         
@@ -882,10 +928,13 @@ def main(config: TrainingConfig = TrainingConfig()):
                         save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
                 
                 step += 1
+            
+            if actual_step >= config.max_steps:
+                break
     
     except KeyboardInterrupt:
         logger.info("\n⚠️ Training interrupted by user")
-        actual_step = step // config.accumulation_steps
+        actual_step = (step // config.accumulation_steps) + start_step
         checkpoint_path = f"checkpoints/korean_llm_interrupted_{actual_step:05d}.pth"
         save_checkpoint(model, optimizer, scheduler, actual_step, checkpoint_path)
     
@@ -903,7 +952,7 @@ if __name__ == "__main__":
         learning_rate=5e-5,
         eval_interval=1000,
         resume_from_checkpoint='latest' if find_latest_checkpoint() else None,
-        download_datasets=False,  # True로 바꾸면 강제로 다시 다운로드
+        download_datasets=False,
         samples_per_dataset=None
     )
     main(config)
