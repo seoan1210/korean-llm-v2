@@ -98,96 +98,49 @@ class DatasetManager:
             "name": "squarelike/OpenOrca-gugugo-ko",
             "config": None,
             "split": "train",
-            "text_keys": ["question", "response"], 
-            "system_key": "system_prompt"
+            "text_key": "text"
         },
         {
             "name": "beomi/KoAlpaca-v1.1a",
             "config": None,
             "split": "train",
-            "text_keys": ["instruction", "output"]
+            "text_keys": ["instruction", "output"]  # 여러 필드 조합
         }
     ]
     
     def __init__(self, cache_dir: Path = DATASETS_CACHE_DIR):
-        self.cache_dir = Path(cache_dir)
+        self.cache_dir = cache_dir
         self.manifest = self._load_manifest()
         ensure_datasets_dir()
     
     def _load_manifest(self) -> Dict:
+        """매니페스트 파일 로드"""
         if DATASETS_MANIFEST_FILE.exists():
-            try:
-                with open(DATASETS_MANIFEST_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to load manifest file: {e}")
-                return {}
+            with open(DATASETS_MANIFEST_FILE, 'r') as f:
+                return json.load(f)
         return {}
     
     def _save_manifest(self):
-        with open(DATASETS_MANIFEST_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.manifest, f, indent=2, ensure_ascii=False)
+        """매니페스트 파일 저장"""
+        with open(DATASETS_MANIFEST_FILE, 'w') as f:
+            json.dump(self.manifest, f, indent=2)
     
     def _get_dataset_hash(self, config: Dict) -> str:
+        """데이터셋 config의 해시값 생성"""
         config_str = json.dumps(config, sort_keys=True)
         return hashlib.md5(config_str.encode()).hexdigest()[:8]
-
-    def _download_openorca_direct(self, local_path: Path) -> Optional[int]:
-        """
-        squarelike/OpenOrca-gugugo-ko 의 대용량 JSON 파이프라인 에러 우회용 직접 다운로드 로직
-        """
-        urls = [
-            "https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko/resolve/main/ko-openorca_1M-GPT4-Augmented_split_0_to_2000_v6.json",
-            "https://huggingface.co/datasets/squarelike/OpenOrca-gugugo-ko/resolve/main/ko-openorca_3_5M-GPT3.5-Augmented_split_0_to_2000.json"
-        ]
-        
-        all_records = []
-        for url in urls:
-            filename = url.split('/')[-1]
-            temp_json_path = local_path / filename
-            
-            # 다운로드 진행 (이미 받아진 파일이 있으면 재활용)
-            if not temp_json_path.exists():
-                logger.info(f"📥 Direct downloading raw file: {filename}...")
-                response = requests.get(url, stream=True)
-                response.raise_for_status()
-                total_size = int(response.headers.get('content-length', 0))
-                
-                with open(temp_json_path, 'wb') as f, tqdm(
-                    desc=filename,
-                    total=total_size,
-                    unit='iB',
-                    unit_scale=True,
-                    unit_divisor=1024,
-                ) as bar:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        size = f.write(chunk)
-                        bar.update(size)
-            
-            logger.info(f"📖 Parsing {filename} safely...")
-            with open(temp_json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-            # int overflow 유발하는 필드를 모두 string으로 안전 변환
-            for item in data:
-                clean_item = {}
-                for k, v in item.items():
-                    if isinstance(v, int):
-                        clean_item[k] = str(v)
-                    else:
-                        clean_item[k] = v
-                all_records.append(clean_item)
-                
-            # 사용 후 용량 확보를 위해 임시 json 삭제 원할 경우 주석 해제
-            # temp_json_path.unlink()
-
-        logger.info(f"💾 Saving cleaned OpenOrca Parquet file ({len(all_records)} items)...")
-        df = pd.DataFrame(all_records)
-        parquet_file = local_path / "data.parquet"
-        df.to_parquet(str(parquet_file), index=False)
-        return len(all_records)
-
+    
     def download_dataset(self, config: Dict, force: bool = False) -> Optional[str]:
+        """
+        데이터셋 다운로드 (실패 시 최대 3번 다른 방식으로 재시도)
+        
+        Args:
+            config: 데이터셋 설정
+            force: 기존 캐시 무시하고 다시 다운로드
+        
+        Returns:
+            로컬 캐시 경로 또는 None
+        """
         dataset_hash = self._get_dataset_hash(config)
         dataset_name = config['name']
         
@@ -199,59 +152,77 @@ class DatasetManager:
                 return cached_path
         
         logger.info(f"📥 Downloading {dataset_name}...")
-        local_path = self.cache_dir / f"{dataset_hash}"
-        local_path.mkdir(parents=True, exist_ok=True)
-
-        # 문제의 OpenOrca 데이터셋은 Direct Download 커스텀 핸들러 사용
-        if dataset_name == "squarelike/OpenOrca-gugugo-ko":
+        
+        # 재시도 전략 정의 (최대 3회)
+        strategies = [
+            {"name": "standard", "streaming": False, "force_redownload": False},
+            {"name": "streaming", "streaming": True, "force_redownload": False},
+            {"name": "force_redownload", "streaming": False, "force_redownload": True},
+        ]
+        
+        last_error = None
+        
+        for attempt, strategy in enumerate(strategies, 1):
             try:
-                num_examples = self._download_openorca_direct(local_path)
+                logger.info(f"🔄 Attempt {attempt}/3 - Strategy: {strategy['name']}")
+                
+                load_kwargs = {
+                    "path": config["name"],
+                    "split": config["split"],
+                    "cache_dir": str(self.cache_dir),
+                }
+                
+                if config.get("config"):
+                    load_kwargs["name"] = config["config"]
+                
+                if strategy["streaming"]:
+                    load_kwargs["streaming"] = True
+                
+                if strategy["force_redownload"]:
+                    load_kwargs["download_mode"] = "force_redownload"
+                
+                # 데이터셋 로드
+                ds = load_dataset(**load_kwargs)
+                
+                # 스트리밍인 경우 전체 데이터를 메모리로 가져오기
+                if strategy["streaming"]:
+                    logger.info("📥 Converting streaming dataset to regular dataset...")
+                    ds = HFDataset.from_list(list(ds))
+                
+                # 로컬 저장 (parquet 형식)
+                local_path = self.cache_dir / f"{dataset_hash}"
+                local_path.mkdir(exist_ok=True)
+                
+                ds.to_parquet(str(local_path / "data.parquet"))
+                
+                # 메타데이터 저장
                 self.manifest[dataset_hash] = {
                     'name': dataset_name,
                     'config': config,
                     'path': str(local_path),
-                    'num_examples': num_examples,
-                    'download_strategy': 'direct_json_clean'
+                    'num_examples': len(ds),
+                    'download_strategy': strategy['name']
                 }
                 self._save_manifest()
-                logger.info(f"✅ Dataset saved: {local_path} ({num_examples} examples)")
+                
+                logger.info(f"✅ Dataset saved: {local_path} ({len(ds)} examples) via {strategy['name']}")
                 return str(local_path)
+            
             except Exception as e:
-                logger.error(f"❌ Direct download failed for OpenOrca: {e}")
-                return None
-
-        # 일반 데이터셋은 기존 방식으로 시도
-        try:
-            load_kwargs = {
-                "path": config["name"],
-                "split": config["split"],
-                "cache_dir": str(self.cache_dir)
-            }
-            if config.get("config"):
-                load_kwargs["name"] = config["config"]
-            
-            ds = load_dataset(**load_kwargs)
-            parquet_file = local_path / "data.parquet"
-            ds.to_parquet(str(parquet_file))
-            num_examples = len(ds)
-            
-            self.manifest[dataset_hash] = {
-                'name': dataset_name,
-                'config': config,
-                'path': str(local_path),
-                'num_examples': num_examples,
-                'download_strategy': 'standard'
-            }
-            self._save_manifest()
-            
-            logger.info(f"✅ Dataset saved: {local_path} ({num_examples} examples)")
-            return str(local_path)
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to download {dataset_name}: {e}")
-            return None
-
+                last_error = e
+                logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']}): {e}")
+                
+                if attempt < 3:
+                    wait_time = attempt * 2  # 2초, 4초 대기
+                    logger.info(f"⏳ Waiting {wait_time} seconds before next attempt...")
+                    time.sleep(wait_time)
+        
+        # 모든 시도 실패
+        logger.error(f"❌ Failed to download {dataset_name} after 3 attempts. Last error: {last_error}")
+        return None
+    
     def get_or_download_all(self, force: bool = False) -> List[str]:
+        """모든 데이터셋 다운로드 또는 캐시 로드"""
         paths = []
         for config in self.DATASETS_CONFIG:
             path = self.download_dataset(config, force=force)
@@ -322,24 +293,13 @@ class LocalKoreanDataset(Dataset):
         for item in ds:
             text = None
             
-            # 1. 단일 text 필드가 있는 경우
+            # 다양한 필드명 시도
             if "text" in item and item["text"]:
                 text = item["text"]
-            
-            # 2. OpenOrca 데이터셋 (system_prompt, question, response)
-            elif "question" in item and "response" in item:
-                system_str = f"### 시스템: {item['system_prompt']}\n" if item.get("system_prompt") else ""
-                text = f"{system_str}### 지시: {item['question']}\n### 응답: {item['response']}"
-            
-            # 3. KoAlpaca 등 (instruction, output)
             elif "instruction" in item and "output" in item:
                 text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
-            
-            # 4. 기타 (question, answer)
             elif "question" in item and "answer" in item:
                 text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
-            
-            # 5. 기타 (prompt, response)
             elif "prompt" in item and "response" in item:
                 text = f"### 프롬프트: {item['prompt']}\n### 응답: {item['response']}"
             
