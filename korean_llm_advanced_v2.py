@@ -27,6 +27,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
 from tkinter import scrolledtext, Entry, Button, Frame, Label, StringVar
 import copy
+import traceback
 
 # ==========================================
 # 로깅 설정 (파일 저장 추가)
@@ -98,13 +99,13 @@ class DatasetManager:
             "name": "squarelike/OpenOrca-gugugo-ko",
             "config": None,
             "split": "train",
-            "text_key": "text"
+            "text_keys": ["question", "response"]
         },
         {
             "name": "beomi/KoAlpaca-v1.1a",
             "config": None,
             "split": "train",
-            "text_keys": ["instruction", "output"]  # 여러 필드 조합
+            "text_keys": ["instruction", "output"]
         }
     ]
     
@@ -116,14 +117,14 @@ class DatasetManager:
     def _load_manifest(self) -> Dict:
         """매니페스트 파일 로드"""
         if DATASETS_MANIFEST_FILE.exists():
-            with open(DATASETS_MANIFEST_FILE, 'r') as f:
+            with open(DATASETS_MANIFEST_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return {}
     
     def _save_manifest(self):
         """매니페스트 파일 저장"""
-        with open(DATASETS_MANIFEST_FILE, 'w') as f:
-            json.dump(self.manifest, f, indent=2)
+        with open(DATASETS_MANIFEST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.manifest, f, indent=2, ensure_ascii=False)
     
     def _get_dataset_hash(self, config: Dict) -> str:
         """데이터셋 config의 해시값 생성"""
@@ -132,14 +133,9 @@ class DatasetManager:
     
     def download_dataset(self, config: Dict, force: bool = False) -> Optional[str]:
         """
-        데이터셋 다운로드 (실패 시 최대 3번 다른 방식으로 재시도)
-        
-        Args:
-            config: 데이터셋 설정
-            force: 기존 캐시 무시하고 다시 다운로드
-        
-        Returns:
-            로컬 캐시 경로 또는 None
+        데이터셋 다운로드
+        - OpenOrca-gugugo-ko는 parquet / streaming 청크 우선
+        - 실패 시 자세한 에러 로그 출력
         """
         dataset_hash = self._get_dataset_hash(config)
         dataset_name = config['name']
@@ -153,14 +149,172 @@ class DatasetManager:
         
         logger.info(f"📥 Downloading {dataset_name}...")
         
-        # 재시도 전략 정의 (최대 3회)
+        last_error = None
+        error_details = []
+        
+        # ============================================================
+        # OpenOrca-gugugo-ko 전용 처리 (JSON OverflowError 회피)
+        # ============================================================
+        if "OpenOrca-gugugo-ko" in dataset_name:
+            strategies = [
+                {"name": "parquet_auto", "desc": "HF auto-converted parquet"},
+                {"name": "parquet_manual", "desc": "수동 parquet 경로 지정"},
+                {"name": "streaming_chunk", "desc": "streaming + 청크 저장"},
+            ]
+            
+            for attempt, strategy in enumerate(strategies, 1):
+                try:
+                    logger.info(f"🔄 Attempt {attempt}/{len(strategies)} - Strategy: {strategy['name']} ({strategy['desc']})")
+                    
+                    if strategy["name"] == "parquet_auto":
+                        ds = load_dataset(
+                            config["name"],
+                            split=config["split"],
+                            cache_dir=str(self.cache_dir),
+                            verification_mode="no_checks",
+                        )
+                    
+                    elif strategy["name"] == "parquet_manual":
+                        ds = load_dataset(
+                            "parquet",
+                            data_files={
+                                "train": "hf://datasets/squarelike/OpenOrca-gugugo-ko@~parquet/default/train/*.parquet"
+                            },
+                            split="train",
+                            cache_dir=str(self.cache_dir),
+                        )
+                    
+                    elif strategy["name"] == "streaming_chunk":
+                        logger.info("📥 Streaming으로 로드 후 청크 단위 저장 중...")
+                        stream_ds = load_dataset(
+                            config["name"],
+                            split=config["split"],
+                            streaming=True,
+                            cache_dir=str(self.cache_dir),
+                        )
+                        
+                        local_path = self.cache_dir / f"{dataset_hash}"
+                        local_path.mkdir(exist_ok=True, parents=True)
+                        
+                        chunk_size = 20000
+                        buffer = []
+                        total = 0
+                        chunk_idx = 0
+                        parquet_files = []
+                        
+                        for item in stream_ds:
+                            buffer.append(item)
+                            if len(buffer) >= chunk_size:
+                                chunk_ds = HFDataset.from_list(buffer)
+                                chunk_file = local_path / f"chunk_{chunk_idx:04d}.parquet"
+                                chunk_ds.to_parquet(str(chunk_file))
+                                parquet_files.append(str(chunk_file))
+                                total += len(buffer)
+                                logger.info(f"   ↳ saved chunk {chunk_idx} ({total} examples so far)")
+                                buffer = []
+                                chunk_idx += 1
+                        
+                        # 남은 버퍼 저장
+                        if buffer:
+                            chunk_ds = HFDataset.from_list(buffer)
+                            chunk_file = local_path / f"chunk_{chunk_idx:04d}.parquet"
+                            chunk_ds.to_parquet(str(chunk_file))
+                            parquet_files.append(str(chunk_file))
+                            total += len(buffer)
+                        
+                        # 청크들을 하나로 합치기
+                        logger.info("📥 Merging chunks into single parquet...")
+                        full_ds = load_dataset(
+                            "parquet",
+                            data_files=parquet_files,
+                            split="train"
+                        )
+                        final_path = local_path / "data.parquet"
+                        full_ds.to_parquet(str(final_path))
+                        
+                        # 임시 청크 파일 삭제
+                        for f in parquet_files:
+                            try:
+                                Path(f).unlink()
+                            except Exception:
+                                pass
+                        
+                        self.manifest[dataset_hash] = {
+                            'name': dataset_name,
+                            'config': config,
+                            'path': str(local_path),
+                            'num_examples': total,
+                            'download_strategy': strategy['name']
+                        }
+                        self._save_manifest()
+                        
+                        logger.info(f"✅ Dataset saved via streaming_chunk: {local_path} ({total} examples)")
+                        return str(local_path)
+                    
+                    # parquet_auto / parquet_manual 성공 시 공통 저장
+                    local_path = self.cache_dir / f"{dataset_hash}"
+                    local_path.mkdir(exist_ok=True, parents=True)
+                    
+                    ds.to_parquet(str(local_path / "data.parquet"))
+                    
+                    self.manifest[dataset_hash] = {
+                        'name': dataset_name,
+                        'config': config,
+                        'path': str(local_path),
+                        'num_examples': len(ds),
+                        'download_strategy': strategy['name']
+                    }
+                    self._save_manifest()
+                    
+                    logger.info(f"✅ Dataset saved: {local_path} ({len(ds)} examples) via {strategy['name']}")
+                    return str(local_path)
+                
+                except Exception as e:
+                    last_error = e
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    tb_str = traceback.format_exc()
+                    
+                    error_details.append({
+                        "attempt": attempt,
+                        "strategy": strategy['name'],
+                        "error_type": error_type,
+                        "error_msg": error_msg,
+                        "traceback": tb_str
+                    })
+                    
+                    logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']})")
+                    logger.warning(f"   ↳ Error Type : {error_type}")
+                    logger.warning(f"   ↳ Error Msg  : {error_msg}")
+                    logger.warning(f"   ↳ Full Traceback:\n{tb_str}")
+                    
+                    if attempt < len(strategies):
+                        wait_time = attempt * 2
+                        logger.info(f"⏳ Waiting {wait_time} seconds before next attempt...")
+                        time.sleep(wait_time)
+            
+            # 모든 전략 실패
+            logger.error("=" * 80)
+            logger.error(f"❌ Failed to download {dataset_name} after {len(strategies)} strategies")
+            logger.error("=" * 80)
+            for detail in error_details:
+                logger.error(f"[Attempt {detail['attempt']}] Strategy: {detail['strategy']}")
+                logger.error(f"  - Type   : {detail['error_type']}")
+                logger.error(f"  - Message: {detail['error_msg']}")
+                logger.error(f"  - Traceback:\n{detail['traceback']}")
+                logger.error("-" * 60)
+            logger.error(f"📌 Last error summary: {type(last_error).__name__}: {last_error}")
+            logger.error("=" * 80)
+            return None
+        
+        # ============================================================
+        # 일반 데이터셋 처리
+        # ============================================================
         strategies = [
             {"name": "standard", "streaming": False, "force_redownload": False},
             {"name": "streaming", "streaming": True, "force_redownload": False},
             {"name": "force_redownload", "streaming": False, "force_redownload": True},
         ]
-        
-        last_error = None
         
         for attempt, strategy in enumerate(strategies, 1):
             try:
@@ -181,21 +335,17 @@ class DatasetManager:
                 if strategy["force_redownload"]:
                     load_kwargs["download_mode"] = "force_redownload"
                 
-                # 데이터셋 로드
                 ds = load_dataset(**load_kwargs)
                 
-                # 스트리밍인 경우 전체 데이터를 메모리로 가져오기
                 if strategy["streaming"]:
                     logger.info("📥 Converting streaming dataset to regular dataset...")
                     ds = HFDataset.from_list(list(ds))
                 
-                # 로컬 저장 (parquet 형식)
                 local_path = self.cache_dir / f"{dataset_hash}"
                 local_path.mkdir(exist_ok=True)
                 
                 ds.to_parquet(str(local_path / "data.parquet"))
                 
-                # 메타데이터 저장
                 self.manifest[dataset_hash] = {
                     'name': dataset_name,
                     'config': config,
@@ -210,27 +360,65 @@ class DatasetManager:
             
             except Exception as e:
                 last_error = e
-                logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']}): {e}")
+                error_type = type(e).__name__
+                error_msg = str(e)
+                tb_str = traceback.format_exc()
+                
+                error_details.append({
+                    "attempt": attempt,
+                    "strategy": strategy['name'],
+                    "error_type": error_type,
+                    "error_msg": error_msg,
+                    "traceback": tb_str
+                })
+                
+                logger.warning(f"⚠️ Attempt {attempt} failed ({strategy['name']})")
+                logger.warning(f"   ↳ Error Type : {error_type}")
+                logger.warning(f"   ↳ Error Msg  : {error_msg}")
+                logger.warning(f"   ↳ Full Traceback:\n{tb_str}")
                 
                 if attempt < 3:
-                    wait_time = attempt * 2  # 2초, 4초 대기
+                    wait_time = attempt * 2
                     logger.info(f"⏳ Waiting {wait_time} seconds before next attempt...")
                     time.sleep(wait_time)
         
         # 모든 시도 실패
-        logger.error(f"❌ Failed to download {dataset_name} after 3 attempts. Last error: {last_error}")
+        logger.error("=" * 80)
+        logger.error(f"❌ Failed to download {dataset_name} after 3 attempts")
+        logger.error("=" * 80)
+        for detail in error_details:
+            logger.error(f"[Attempt {detail['attempt']}] Strategy: {detail['strategy']}")
+            logger.error(f"  - Type   : {detail['error_type']}")
+            logger.error(f"  - Message: {detail['error_msg']}")
+            logger.error(f"  - Traceback:\n{detail['traceback']}")
+            logger.error("-" * 60)
+        logger.error(f"📌 Last error summary: {type(last_error).__name__}: {last_error}")
+        logger.error("=" * 80)
         return None
     
     def get_or_download_all(self, force: bool = False) -> List[str]:
         """모든 데이터셋 다운로드 또는 캐시 로드"""
         paths = []
+        failed = []
+        
         for config in self.DATASETS_CONFIG:
             path = self.download_dataset(config, force=force)
             if path:
                 paths.append(path)
+            else:
+                failed.append(config['name'])
         
         logger.info(f"✅ Ready with {len(paths)} datasets")
+        
+        if failed:
+            logger.warning("=" * 60)
+            logger.warning(f"⚠️ 다음 데이터셋 다운로드 실패 ({len(failed)}개):")
+            for name in failed:
+                logger.warning(f"   - {name}")
+            logger.warning("=" * 60)
+        
         return paths
+
 
 # ==========================================
 # 로컬 데이터셋 클래스
@@ -246,23 +434,14 @@ class LocalKoreanDataset(Dataset):
         max_len: int = 256,
         data_samples_per_dataset: Optional[int] = None
     ):
-        """
-        Args:
-            dataset_paths: 로컬 데이터셋 경로 리스트
-            tokenizer: 토크나이저
-            max_len: 최대 시퀀스 길이
-            data_samples_per_dataset: 데이터셋당 사용할 샘플 수 (None이면 전체)
-        """
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.samples = []
         
         logger.info("📚 Loading local datasets...")
         
-        # 모든 데이터셋에서 샘플 로드
         for dataset_path in dataset_paths:
             try:
-                # parquet 파일 로드
                 parquet_file = Path(dataset_path) / "data.parquet"
                 if not parquet_file.exists():
                     logger.warning(f"Parquet file not found: {parquet_file}")
@@ -270,11 +449,9 @@ class LocalKoreanDataset(Dataset):
                 
                 ds = HFDataset.from_parquet(str(parquet_file))
                 
-                # 샘플 수 제한
                 if data_samples_per_dataset:
                     ds = ds.select(range(min(len(ds), data_samples_per_dataset)))
                 
-                # 텍스트 추출
                 texts = self._extract_texts(ds)
                 self.samples.extend(texts)
                 
@@ -282,6 +459,7 @@ class LocalKoreanDataset(Dataset):
             
             except Exception as e:
                 logger.error(f"❌ Error loading dataset from {dataset_path}: {e}")
+                logger.error(f"   Full traceback:\n{traceback.format_exc()}")
                 continue
         
         logger.info(f"✅ Total samples loaded: {len(self.samples)}")
@@ -293,11 +471,16 @@ class LocalKoreanDataset(Dataset):
         for item in ds:
             text = None
             
-            # 다양한 필드명 시도
             if "text" in item and item["text"]:
                 text = item["text"]
             elif "instruction" in item and "output" in item:
                 text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
+            elif "question" in item and "response" in item:  # OpenOrca-gugugo-ko
+                system = item.get("system_prompt", "")
+                if system:
+                    text = f"### 시스템: {system}\n### 질문: {item['question']}\n### 응답: {item['response']}"
+                else:
+                    text = f"### 질문: {item['question']}\n### 응답: {item['response']}"
             elif "question" in item and "answer" in item:
                 text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
             elif "prompt" in item and "response" in item:
@@ -312,21 +495,17 @@ class LocalKoreanDataset(Dataset):
         return len(self.samples)
     
     def __getitem__(self, idx: int) -> torch.Tensor:
-        """토크나이징된 텐서 반환"""
         text = self.samples[idx]
         
         try:
-            # EOS 토큰 추가
             text_with_eos = text + self.tokenizer.eos_token
             
-            # 토크나이징
             encoded = self.tokenizer.encode(
                 text_with_eos,
                 truncation=True,
                 max_length=self.max_len
             )
             
-            # 패딩
             if len(encoded) < self.max_len:
                 encoded += [self.tokenizer.pad_token_id] * (self.max_len - len(encoded))
             else:
@@ -336,8 +515,8 @@ class LocalKoreanDataset(Dataset):
         
         except Exception as e:
             logger.warning(f"Tokenization error: {e}")
-            # 폴백: 패딩된 토큰 반환
             return torch.full((self.max_len,), self.tokenizer.pad_token_id, dtype=torch.long)
+
 
 def collate_fn(batch: List[torch.Tensor]) -> torch.Tensor:
     """배치 콜레이션"""
