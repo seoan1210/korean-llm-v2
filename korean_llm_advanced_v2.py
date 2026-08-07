@@ -753,7 +753,7 @@ def generate(
     
     model.eval()
     
-    prompt_text = f"### 지시: {prompt}\n### 응답:"
+    prompt_text = f"### 질문: {prompt}\n### 응답:"
     tokens = tokenizer.encode(prompt_text, return_tensors="pt").to(device)
     
     kv_caches = None
