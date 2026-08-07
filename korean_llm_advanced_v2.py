@@ -474,17 +474,17 @@ class LocalKoreanDataset(Dataset):
             if "text" in item and item["text"]:
                 text = item["text"]
             elif "instruction" in item and "output" in item:
-                text = f"### 지시: {item['instruction']}\n### 응답: {item['output']}"
+                text = f"### 질문: {item['instruction']}\n### 응답: {item['output']}"
             elif "question" in item and "response" in item:  # OpenOrca-gugugo-ko
                 system = item.get("system_prompt", "")
                 if system:
-                    text = f"### 시스템: {system}\n### 질문: {item['question']}\n### 응답: {item['response']}"
+                    text = f"### 질문: {item['question']}\n### 응답: {item['response']}"
                 else:
                     text = f"### 질문: {item['question']}\n### 응답: {item['response']}"
             elif "question" in item and "answer" in item:
-                text = f"### 질문: {item['question']}\n### 답변: {item['answer']}"
+                text = f"### 질문: {item['question']}\n### 응답: {item['answer']}"
             elif "prompt" in item and "response" in item:
-                text = f"### 프롬프트: {item['prompt']}\n### 응답: {item['response']}"
+                text = f"### 질문: {item['prompt']}\n### 응답: {item['response']}"
             
             if text and len(text) > 5:
                 texts.append(text)
