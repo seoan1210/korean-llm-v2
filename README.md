@@ -30,10 +30,10 @@
 
 | 항목 | 권장사양 | 비고 |
 |------|--------|------|
-| **GPU** | RTX 4090 (24GB) / A6000 (48GB) / RTX 6000 Ada | **세팅 변경 금지** |
+| **GPU** | RTX 4090 (24GB) / A6000 (48GB) / RTX 6000 Ada | **원활한 학습 가능** |
 | **GPU VRAM** | **최소 23GB** | 현재 설정: `batch_size=2`, `dim=1920`, `n_layers=20` |
-| **CPU 메모리** | 64GB 이상 권장 | 데이터 전처리용 |
-| **저장공간** | 500GB 이상 | 데이터셋(~200GB) + 체크포인트(~10GB 단계별) |
+| **메모리** | 64GB 이상 권장 | 데이터 전처리용 |
+| **저장공간** | 1TB 이상 | 데이터셋(~200GB) + 체크포인트(~10GB 단계별) |
 | **연결** | 안정적인 인터넷 | 데이터셋 다운로드용 |
 
 ### 🔧 **조정 가능한 사양 (저사양에서 실행하는 경우)**
@@ -71,22 +71,19 @@ CUDA:          11.8 이상 (권장: 12.1+)
 cuDNN:         8.7 이상
 ```
 
+* 최신 GPU는 Pytorch Nightly 버전 추천
+
 ### 설치 명령어
 
 ```bash
 # Python 3.11 환경 생성 (Conda 사용 권장)
-conda create -n korean-llm python=3.11 -y
-conda activate korean-llm
+conda create -n korean-llm-v2 python=3.11 -y
+conda activate korean-llm-v2
 
 # PyTorch 설치 (CUDA 12.1 기준)
 pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 
 # 의존성 설치
-pip install -r requirements.txt
-```
-
-### requirements.txt
-
 ```
 torch==2.4.0
 torchvision==0.19.0
@@ -106,8 +103,8 @@ tqdm==4.66.1
 ### 1️⃣ 저장소 클론
 
 ```bash
-git clone https://github.com/yourname/korean-llm-training.git
-cd korean-llm-training
+git clone https://github.com/seoan1210/korean-llm-v2.git
+cd korean-llm-v2
 ```
 
 ### 2️⃣ 환경 설정
@@ -128,9 +125,8 @@ pip install transformers==4.36.0 datasets==2.16.0 pandas==2.1.3 matplotlib==3.8.
 
 ```
 korean-llm-training/
-├── korean_llm_fixed.py           # 메인 학습 스크립트
-├── README.md                     # 이 파일
-├── requirements.txt              # 패키지 의존성
+├── korean_llm_advanced_v2.py           # 메인 학습 스크립트
+├── README.md
 ├── checkpoints/                  # 모델 체크포인트 (자동 생성)
 ├── datasets/                     # 캐시된 데이터셋 (자동 생성)
 │   ├── cache/                    # 다운로드된 파일
@@ -148,7 +144,7 @@ korean-llm-training/
 
 ```bash
 # 모든 기본값 사용 (변경 불필요)
-python korean_llm_fixed.py
+python korean_llm_advanced_v2.py
 ```
 
 **일어나는 일:**
@@ -163,7 +159,7 @@ python korean_llm_fixed.py
 
 ### 학습 설정 커스터마이징
 
-`korean_llm_fixed.py`의 **마지막 부분** 수정:
+`korean_llm_advanced_v2`의 **마지막 부분** 수정:
 
 ```python
 if __name__ == "__main__":
@@ -345,7 +341,7 @@ elif "prompt" in item and "response" in item:
 
 ## 🧠 모델 아키텍처
 
-### 기본 설정 (23GB VRAM - 변경 금지)
+### 기본 설정 (23GB VRAM & 64GB RAM)
 
 ```
 ┌─────────────────────────────────────────────┐
