@@ -84,7 +84,6 @@ conda activate korean-llm-v2
 pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 
 # 의존성 설치
-```
 torch==2.4.0
 torchvision==0.19.0
 torchaudio==2.4.0
@@ -124,7 +123,7 @@ pip install transformers==4.36.0 datasets==2.16.0 pandas==2.1.3 matplotlib==3.8.
 ### 3️⃣ 디렉토리 구조 확인
 
 ```
-korean-llm-training/
+korean-llm-v2/
 ├── korean_llm_advanced_v2.py           # 메인 학습 스크립트
 ├── README.md
 ├── checkpoints/                  # 모델 체크포인트 (자동 생성)
