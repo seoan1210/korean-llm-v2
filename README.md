@@ -1,12 +1,12 @@
 # 🇰🇷 KoreanLLM Training Framework
 
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red?style=flat-square)](https://pytorch.org/)
-[![CUDA](https://img.shields.io/badge/CUDA-11.8%2B-76b900?style=flat-square)](https://developer.nvidia.com/cuda-toolkit)
+[![CUDA](https://img.shields.io/badge/CUDA-13.0%2B-76b900?style=flat-square)](https://developer.nvidia.com/cuda-toolkit)
 [![Status](https://img.shields.io/badge/Status-Active%20Training-brightgreen?style=flat-square)]()
-[![Steps](https://img.shields.io/badge/Steps-9700%2F50000-orange?style=flat-square)]()
-[![Loss](https://img.shields.io/badge/Loss-1.50%20±%200.08-yellow?style=flat-square)]()
+[![Steps](https://img.shields.io/badge/Steps-2000%2F50000-orange?style=flat-square)]()
+[![Loss](https://img.shields.io/badge/Loss-2.6491%20±%200.08-yellow?style=flat-square)]()
 
 > **한국어 대규모 언어 모델(LLM) 학습 및 추론 프레임워크**  
 > PAD/EOS 분리 · 자동 데이터셋 관리 · 실시간 모니터링 GUI  
